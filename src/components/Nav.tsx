@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { PantherMark, Wordmark } from "./Logo";
 import { reserveChannel, reserveUrl } from "../content";
 import { openStatus, useNow } from "../time";
@@ -53,14 +54,9 @@ export default function Nav() {
             <span className="status__detail">. {status.detail}</span>
           </span>
         </a>
-        <a
-          className="btn btn--small"
-          href={reserveUrl("Hola, quiero reservar en Arena Panter.")}
-          target="_blank"
-          rel="noreferrer"
-        >
-          Reservar por {reserveChannel}
-        </a>
+        <Link className="btn btn--small" to="/cuenta">
+          Mi cuenta
+        </Link>
         <button
           className="nav__toggle"
           type="button"
@@ -82,16 +78,19 @@ export default function Nav() {
             </a>
           ))}
         </nav>
+        <Link className="btn" to="/cuenta">
+          Mi cuenta
+        </Link>
         <p className="menu__status">
           {status.headline}. {status.detail}.
         </p>
         <a
-          className="btn"
+          className="btn btn--ghost"
           href={reserveUrl("Hola, quiero reservar en Arena Panter.")}
           target="_blank"
           rel="noreferrer"
         >
-          Reservar por {reserveChannel}
+          Escribir por {reserveChannel}
         </a>
       </div>
     </header>

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+    <title>Panter Bloqueo</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      html, body { height: 100%; }
+      body {
+        display: grid; place-items: center; overflow: hidden; cursor: default; user-select: none;
+        background: radial-gradient(60% 50% at 50% 40%, rgba(165, 15, 26, 0.38), transparent 70%), #000;
+        color: #f6eeea; font-family: "Bahnschrift", "Segoe UI", system-ui, sans-serif; font-stretch: 75%;
+      }
+      [hidden] { display: none !important; }
+      .screen { display: grid; justify-items: center; gap: 2.2vh; width: min(92vw, 1500px); text-align: center; }
+      .mark { height: 15vh; filter: drop-shadow(0 0 5vh rgba(255, 43, 28, 0.7)); }
+      .station { font-size: 15vh; font-weight: 700; line-height: 0.9; letter-spacing: 0.01em; text-transform: uppercase; }
+      .lead { max-width: 30em; font-size: 2.6vh; color: #c9b8b4; }
+      .how { display: grid; grid-template-columns: auto auto; gap: 5vw; align-items: center; margin-top: 2vh; text-align: left; }
+      .code__label { font-size: 2.2vh; color: #c9b8b4; }
+      .code { font-size: 17vh; font-weight: 700; line-height: 1; letter-spacing: 0.12em; font-variant-numeric: tabular-nums; color: #ff2b1c; text-shadow: 0 0 4vh rgba(255, 43, 28, 0.6); }
+      .steps { margin-top: 1.4vh; padding-left: 1.3em; font-size: 2.3vh; line-height: 1.6; color: #e6d6d2; }
+      .qr { width: 26vh; height: 26vh; padding: 1vh; background: #fff; }
+      .qr__label { margin-top: 1vh; font-size: 1.9vh; color: #c9b8b4; text-align: center; }
+      .foot { position: fixed; bottom: 2.4vh; left: 0; right: 0; font-size: 1.7vh; color: #7d6d6a; text-align: center; }
+      form { display: grid; gap: 1.6vh; width: min(92vw, 560px); padding: 3.4vh; text-align: left; background: #12060a; border: 1px solid rgba(255, 43, 28, 0.4); user-select: text; }
+      form h1 { font-size: 3.4vh; text-transform: uppercase; }
+      form p { font-size: 1.9vh; color: #c9b8b4; }
+      label { display: grid; gap: 0.6vh; font-size: 1.8vh; font-weight: 600; }
+      input { padding: 1.3vh 1.2vh; font: inherit; font-size: 2vh; color: #f6eeea; background: #050203; border: 1px solid rgba(246, 238, 234, 0.3); }
+      input:focus-visible { outline: 2px solid #ff2b1c; }
+      button { padding: 1.5vh 2vh; font: inherit; font-size: 2vh; font-weight: 700; color: #000; background: #ff2b1c; border: 0; cursor: pointer; }
+      button.ghost { color: #f6eeea; background: rgba(246, 238, 234, 0.12); }
+      .row { display: flex; gap: 1vh; flex-wrap: wrap; }
+      .error { font-size: 1.9vh; color: #ff8a7a; min-height: 1.2em; }
+    </style>
+  </head>
+  <body>
+    <!-- Primera vez: conectar esta PC con el servidor -->
+    <form id="setup" hidden>
+      <h1>Conectar esta PC</h1>
+      <p>En el panel de la web: Caja, Ajustes, Estaciones. Genera la credencial de esta PC y pégala aquí.</p>
+      <label>Dirección de la web <input id="serverUrl" placeholder="https://tu-dominio.com" required /></label>
+      <label>Credencial de la PC <input id="token" placeholder="pc_..." required /></label>
+      <label>Clave de mantenimiento (para cerrar este programa) <input id="pin" type="password" required /></label>
+      <p class="error" id="setupError"></p>
+      <button type="submit">Conectar</button>
+    </form>
+
+    <!-- Pantalla de bloqueo -->
+    <div class="screen" id="locked" hidden>
+      <img class="mark" src="mark.svg" alt="Arena Panter" />
+      <p class="station" id="station">PC</p>
+      <p class="lead" id="lead"></p>
+      <div class="how" id="how">
+        <div>
+          <p class="code__label">Código de esta PC</p>
+          <p class="code" id="code">0000</p>
+          <ol class="steps">
+            <li>Entra a tu cuenta en <strong id="site"></strong></li>
+            <li>Elige esta PC y escribe el código</li>
+            <li>Elige cuánto tiempo quieres jugar</li>
+          </ol>
+        </div>
+        <div>
+          <img class="qr" id="qr" alt="Código QR para activar esta PC" />
+          <p class="qr__label">O escanea con tu teléfono</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Clave de mantenimiento: Ctrl + Mayús + M -->
+    <form id="maint" hidden>
+      <h1>Mantenimiento</h1>
+      <label>Clave de mantenimiento <input id="maintPin" type="password" required /></label>
+      <p class="error" id="maintError"></p>
+      <div class="row">
+        <button type="submit" data-action="quit">Cerrar el programa</button>
+        <button type="submit" class="ghost" data-action="reset">Volver a configurar</button>
+        <button type="button" class="ghost" id="maintCancel">Cancelar</button>
+      </div>
+    </form>
+
+    <p class="foot" id="foot"></p>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let view = { phase: "configurar" };
+      let maintOpen = false;
+
+      const LEADS = {
+        bloqueada: "Esta PC está libre. Actívala desde tu teléfono con tu saldo Panter, o pide ayuda en caja.",
+        sin_conexion: "Esta PC perdió la conexión con el servidor. Avisa en caja para que te ayuden.",
+        deshabilitada: "Esta PC no está disponible por ahora. Elige otra o pregunta en caja.",
+      };
+
+      function paint() {
+        const setup = view.phase === "configurar";
+        $("setup").hidden = !setup || maintOpen;
+        $("maint").hidden = !maintOpen;
+        $("locked").hidden = setup || maintOpen;
+        if (setup) return;
+        $("station").textContent = view.station ? view.station.label : "PC";
+        const showCode = view.phase === "bloqueada" && view.pairCode;
+        $("lead").textContent = view.phase === "bloqueada" && !showCode ? "Un momento: preparando el código de esta PC…" : LEADS[view.phase] || "";
+        $("how").hidden = !showCode;
+        if (showCode) {
+          $("code").textContent = view.pairCode;
+          $("site").textContent = `${(view.serverUrl || "").replace(/^https?:\/\//, "")}/cuenta`;
+          if (view.qr) $("qr").src = view.qr;
+        }
+        $("foot").textContent = view.phase === "sin_conexion" && view.error ? `Detalle para el personal: ${view.error}` : "";
+      }
+
+      window.panter.onView((next) => { view = next; paint(); });
+      window.panter.getView().then((first) => { view = first; paint(); });
+
+      $("setup").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        $("setupError").textContent = "Conectando…";
+        const result = await window.panter.setup({ serverUrl: $("serverUrl").value, token: $("token").value, pin: $("pin").value });
+        $("setupError").textContent = result.ok ? "" : result.error;
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "m" && view.phase !== "configurar") {
+          maintOpen = true; $("maintError").textContent = ""; $("maintPin").value = ""; paint(); $("maintPin").focus();
+        }
+        if (event.key === "Escape" && maintOpen) { maintOpen = false; paint(); }
+      });
+      $("maintCancel").addEventListener("click", () => { maintOpen = false; paint(); });
+      $("maint").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const action = event.submitter?.dataset.action || "quit";
+        const result = await window.panter.maintenance({ pin: $("maintPin").value, action });
+        if (!result.ok) $("maintError").textContent = result.error;
+        else { maintOpen = false; paint(); }
+      });
+    </script>
+  </body>
+</html>

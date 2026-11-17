@@ -8,20 +8,41 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
-    "start": "node server.js"
+    "dev:server": "tsx watch --env-file-if-exists=.env server/index.ts",
+    "build": "tsc --noEmit && vite build && esbuild server/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/index.js --log-level=warning",
+    "start": "node dist-server/index.js",
+    "db:generate": "drizzle-kit generate",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@fontsource-variable/saira": "^5.3.0",
+    "@tanstack/react-query": "^5.108.0",
+    "@trpc/client": "^11.28.4",
+    "@trpc/react-query": "^11.28.4",
+    "@trpc/server": "^11.28.4",
+    "bcryptjs": "^3.0.3",
+    "compression": "^1.8.2",
+    "drizzle-orm": "^0.45.4",
+    "express": "^5.3.0",
+    "jose": "^6.2.17",
+    "mysql2": "^3.24.6",
+    "qrcode": "^1.5.4",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.5",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@types/compression": "^1.8.1",
+    "@types/express": "^5.0.6",
     "@types/node": "^26.6.6",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
+    "drizzle-kit": "^0.31.11",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.8"
   }

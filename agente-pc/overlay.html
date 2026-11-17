@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      html, body { height: 100%; background: transparent; overflow: hidden; }
+      body { font-family: "Bahnschrift", "Segoe UI", system-ui, sans-serif; font-stretch: 75%; color: #f6eeea; user-select: none; }
+      .box { display: grid; align-content: center; gap: 2px; height: 100%; padding: 10px 16px; background: rgba(0, 0, 0, 0.78); border: 1px solid rgba(255, 43, 28, 0.6); border-left: 5px solid #ff2b1c; }
+      .label { font-size: 13px; color: #c9b8b4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .clock { font-size: 38px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+      .box.soon { border-color: #f5b800; border-left-color: #f5b800; }
+      .box.grace { background: rgba(120, 8, 14, 0.94); border-color: #ff2b1c; text-align: center; animation: pulse 1.2s ease-in-out infinite; }
+      .box.grace .label { font-size: 22px; font-weight: 700; color: #fff; white-space: normal; }
+      .box.grace .clock { font-size: 64px; }
+      @keyframes pulse { 50% { background: rgba(200, 16, 24, 0.96); } }
+      @media (prefers-reduced-motion: reduce) { .box.grace { animation: none; } }
+    </style>
+  </head>
+  <body>
+    <div class="box" id="box">
+      <p class="label" id="label"></p>
+      <p class="clock" id="clock"></p>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let view = null;
+
+      function format(msLeft) {
+        const s = Math.max(0, Math.ceil(msLeft / 1000));
+        const h = Math.floor(s / 3600);
+        const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+        const sec = String(s % 60).padStart(2, "0");
+        return h ? `${h}:${m}:${sec}` : `${m}:${sec}`;
+      }
+
+      function paint() {
+        if (!view) return;
+        const now = Date.now();
+        const box = $("box");
+        box.className = "box";
+        if (view.phase === "activa") {
+          const left = view.session.endsAt - now;
+          if (left < 5 * 60 * 1000) box.classList.add("soon");
+          $("label").textContent = `${view.station ? view.station.label : "PC"}, ${view.session.memberName}${view.online ? "" : " (sin conexión)"}`;
+          $("clock").textContent = format(left);
+        } else if (view.phase === "gracia") {
+          box.classList.add("grace");
+          $("label").textContent = "Se acabó tu tiempo. Guarda tu partida: esta PC se bloquea en";
+          $("clock").textContent = format(view.session.graceEndsAt - now);
+        } else if (view.phase === "mantenimiento") {
+          $("label").textContent = "Mantenimiento: PC desbloqueada";
+          $("clock").textContent = view.unlockUntil ? format(view.unlockUntil - now) : "";
+        }
+      }
+
+      window.panter.onView((next) => { view = next; paint(); });
+      window.panter.getView().then((first) => { view = first; paint(); });
+      setInterval(paint, 250);
+    </script>
+  </body>
+</html>

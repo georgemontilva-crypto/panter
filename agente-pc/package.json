@@ -1,0 +1,26 @@
+{
+  "name": "panter-bloqueo",
+  "productName": "Panter Bloqueo",
+  "version": "0.1.0",
+  "description": "Programa de bloqueo de las PC de Arena Panter",
+  "author": "Arena Panter",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.arenapanter.bloqueo",
+    "files": ["main.js", "preload.js", "lock.html", "overlay.html", "mark.svg"],
+    "win": { "target": "nsis" },
+    "nsis": { "oneClick": true, "perMachine": false, "runAfterFinish": true }
+  }
+}

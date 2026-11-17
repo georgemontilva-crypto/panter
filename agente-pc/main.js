@@ -1,0 +1,267 @@
+// Panter Bloqueo: programa que corre en cada PC de la arena.
+// Cada 3 segundos pregunta al servidor qué debe hacer con esta máquina:
+//   bloqueada      -> pantalla de bloqueo con el número de la PC y el código para activarla
+//   activa         -> escritorio libre + contador pequeño en una esquina
+//   gracia         -> aviso grande: "se acabó tu tiempo, guarda tu partida" (minutos extra)
+//   mantenimiento  -> escritorio libre para el personal
+// Si se cae el internet con una sesión en curso, sigue contando con la última hora de fin conocida.
+
+const { app, BrowserWindow, ipcMain, screen, shell } = require("electron");
+const fs = require("node:fs");
+const path = require("node:path");
+const crypto = require("node:crypto");
+const QRCode = require("qrcode");
+
+const POLL_MS = 3000;
+const OFFLINE_AFTER_MS = 15000;
+// PANTER_CONFIG_DIR permite usar otra carpeta de configuración (pruebas).
+if (process.env.PANTER_CONFIG_DIR) app.setPath("userData", process.env.PANTER_CONFIG_DIR);
+const configFile = () => path.join(app.getPath("userData"), "config.json");
+const sha = (text) => crypto.createHash("sha256").update(String(text)).digest("hex");
+
+let config = null; // { serverUrl, token, pinHash }
+let lockWin = null;
+let overlayWin = null;
+let quitting = false;
+
+// Lo último que dijo el servidor, con las horas ya convertidas al reloj de esta PC.
+let remote = null; // { state, station, pairCode, session: { memberName, endsAt, graceEndsAt }, unlockUntil }
+let lastOkAt = 0;
+let lastError = "";
+let lastSent = "";
+let lastPhase = "";
+
+function loadConfig() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(configFile(), "utf8"));
+    if (parsed.serverUrl && parsed.token) config = parsed;
+  } catch {
+    config = null;
+  }
+}
+
+function saveConfig(next) {
+  fs.mkdirSync(path.dirname(configFile()), { recursive: true });
+  fs.writeFileSync(configFile(), JSON.stringify(next, null, 2));
+  config = next;
+}
+
+// ---------- Ventanas ----------
+function createLockWindow() {
+  lockWin = new BrowserWindow({
+    show: false,
+    frame: false,
+    fullscreen: true,
+    kiosk: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    minimizable: false,
+    closable: false,
+    backgroundColor: "#000000",
+    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
+  });
+  lockWin.setAlwaysOnTop(true, "screen-saver");
+  lockWin.setMenu(null);
+  lockWin.loadFile(path.join(__dirname, "lock.html"));
+  // Alt+F4 y similares: mientras el programa no se esté cerrando a propósito, la ventana no se cierra.
+  lockWin.on("close", (event) => {
+    if (!quitting) event.preventDefault();
+  });
+  lockWin.webContents.on("before-input-event", (event, input) => {
+    const combo = (input.control || input.alt || input.meta) && input.type === "keyDown";
+    if (combo && ["r", "w", "i", "f4", "tab"].includes(input.key.toLowerCase())) event.preventDefault();
+  });
+}
+
+function createOverlayWindow() {
+  overlayWin = new BrowserWindow({
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    width: 300,
+    height: 96,
+    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
+  });
+  overlayWin.setAlwaysOnTop(true, "screen-saver");
+  overlayWin.setIgnoreMouseEvents(true);
+  overlayWin.loadFile(path.join(__dirname, "overlay.html"));
+  overlayWin.on("close", (event) => {
+    if (!quitting) event.preventDefault();
+  });
+}
+
+function placeOverlay(big) {
+  const { workArea } = screen.getPrimaryDisplay();
+  const width = big ? Math.min(760, workArea.width - 40) : 300;
+  const height = big ? 150 : 96;
+  const x = big ? workArea.x + Math.round((workArea.width - width) / 2) : workArea.x + workArea.width - width - 16;
+  overlayWin.setBounds({ x, y: workArea.y + 16, width, height });
+}
+
+function showLock() {
+  if (!lockWin.isVisible()) lockWin.show();
+  lockWin.setKiosk(true);
+  lockWin.setAlwaysOnTop(true, "screen-saver");
+  if (!lockWin.isFocused()) lockWin.focus();
+  if (overlayWin.isVisible()) overlayWin.hide();
+}
+
+function showDesktop(big) {
+  if (lockWin.isVisible()) {
+    lockWin.setKiosk(false);
+    lockWin.hide();
+  }
+  placeOverlay(big);
+  if (!overlayWin.isVisible()) overlayWin.showInactive();
+}
+
+// ---------- Estado ----------
+/** Decide qué mostrar ahora mismo con lo último que se sabe, haya o no conexión. */
+function currentView() {
+  const now = Date.now();
+  if (!config) return { phase: "configurar" };
+  const online = now - lastOkAt < OFFLINE_AFTER_MS;
+  const base = { station: remote?.station ?? null, online, error: lastError, serverUrl: config.serverUrl };
+  const session = remote?.session;
+  if (session && now < session.graceEndsAt) {
+    return { ...base, phase: now < session.endsAt ? "activa" : "gracia", session };
+  }
+  if (online && remote?.state === "mantenimiento") return { ...base, phase: "mantenimiento", unlockUntil: remote.unlockUntil };
+  if (online && remote?.state === "deshabilitada") return { ...base, phase: "deshabilitada" };
+  if (!online) return { ...base, phase: "sin_conexion" };
+  return { ...base, phase: "bloqueada", pairCode: remote?.pairCode ?? null, qr: remote?.qr ?? null };
+}
+
+function render() {
+  const view = currentView();
+  const unlocked = view.phase === "activa" || view.phase === "gracia" || view.phase === "mantenimiento";
+  if (unlocked) showDesktop(view.phase === "gracia");
+  else showLock();
+
+  if (view.phase !== lastPhase) {
+    // Aviso sonoro al entrar al tiempo extra y al bloquearse.
+    if (view.phase === "gracia" || (lastPhase === "gracia" && view.phase === "bloqueada")) shell.beep();
+    lastPhase = view.phase;
+  }
+  const payload = JSON.stringify(view);
+  if (payload !== lastSent) {
+    lastSent = payload;
+    lockWin.webContents.send("view", view);
+    overlayWin.webContents.send("view", view);
+  }
+}
+
+async function poll() {
+  if (!config) return;
+  try {
+    const response = await fetch(`${config.serverUrl}/api/agent/heartbeat`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.token}` },
+      body: JSON.stringify({ version: app.getVersion() }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `El servidor respondió ${response.status}`);
+    // Diferencia entre el reloj del servidor y el de esta PC: las horas de fin se llevan al reloj local.
+    const offset = data.serverTime - Date.now();
+    const local = (ms) => (ms ? ms - offset : ms);
+    const pairCode = data.pairCode;
+    let qr = remote?.qr ?? null;
+    if (pairCode && pairCode !== remote?.pairCode) {
+      qr = await QRCode.toDataURL(`${config.serverUrl}/cuenta?pc=${data.station.number}&c=${pairCode}`, { margin: 1, width: 360 });
+    }
+    remote = {
+      state: data.state,
+      station: data.station,
+      pairCode,
+      qr: pairCode ? qr : null,
+      unlockUntil: local(data.unlockUntil),
+      session: data.session
+        ? { memberName: data.session.memberName, endsAt: local(data.session.endsAt), graceEndsAt: local(data.session.graceEndsAt) }
+        : null,
+    };
+    lastOkAt = Date.now();
+    lastError = "";
+  } catch (error) {
+    lastError = error.name === "TimeoutError" ? "El servidor no responde." : String(error.message || error);
+  }
+  render();
+}
+
+// ---------- Configuración y salida de mantenimiento ----------
+ipcMain.handle("setup", async (_event, input) => {
+  const serverUrl = String(input.serverUrl || "").trim().replace(/\/+$/, "");
+  const token = String(input.token || "").trim();
+  const pin = String(input.pin || "").trim();
+  if (!/^https?:\/\//.test(serverUrl)) return { ok: false, error: "La dirección debe empezar por https://" };
+  if (!token.startsWith("pc_")) return { ok: false, error: "La credencial empieza por pc_. Cópiala completa desde el panel." };
+  if (pin.length < 4) return { ok: false, error: "La clave de mantenimiento debe tener al menos 4 caracteres." };
+  try {
+    const response = await fetch(`${serverUrl}/api/agent/heartbeat`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: "{}",
+      signal: AbortSignal.timeout(8000),
+    });
+    const data = await response.json();
+    if (!response.ok) return { ok: false, error: data.error || "El servidor rechazó la credencial." };
+    saveConfig({ serverUrl, token, pinHash: sha(pin) });
+    app.setLoginItemSettings({ openAtLogin: true });
+    await poll();
+    return { ok: true, label: data.station.label };
+  } catch {
+    return { ok: false, error: "No se pudo conectar con esa dirección. Revisa el internet y que esté bien escrita." };
+  }
+});
+
+// Desde la pantalla de bloqueo, Ctrl+Mayús+M pide la clave de mantenimiento.
+ipcMain.handle("maintenance", (_event, input) => {
+  if (!config || sha(input.pin) !== config.pinHash) return { ok: false, error: "Clave incorrecta." };
+  if (input.action === "reset") {
+    fs.rmSync(configFile(), { force: true });
+    config = null;
+    remote = null;
+    lastSent = "";
+    render();
+    return { ok: true };
+  }
+  quitting = true;
+  app.quit();
+  return { ok: true };
+});
+
+ipcMain.handle("view", () => currentView());
+
+// ---------- Arranque ----------
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.whenReady().then(() => {
+    loadConfig();
+    createLockWindow();
+    createOverlayWindow();
+    lockWin.once("ready-to-show", () => render());
+    poll();
+    setInterval(poll, POLL_MS);
+    // Entre consulta y consulta, el reloj local decide: la PC se bloquea a tiempo aunque no haya internet.
+    setInterval(render, 1000);
+    // Si otra ventana le quita el foco a la pantalla de bloqueo, lo recupera.
+    setInterval(() => {
+      if (lockWin.isVisible() && !lockWin.isFocused()) {
+        lockWin.setAlwaysOnTop(true, "screen-saver");
+        lockWin.focus();
+      }
+    }, 700);
+  });
+  app.on("window-all-closed", () => {});
+  app.on("before-quit", (event) => {
+    if (!quitting) event.preventDefault();
+  });
+}
