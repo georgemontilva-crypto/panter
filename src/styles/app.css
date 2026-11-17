@@ -12,8 +12,8 @@
   display: flex;
   align-items: center;
   gap: 18px;
-  height: 60px;
-  padding-inline: clamp(16px, 4vw, 40px);
+  height: calc(60px + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) max(clamp(16px, 4vw, 40px), env(safe-area-inset-right)) 0 max(clamp(16px, 4vw, 40px), env(safe-area-inset-left));
   background: rgba(0, 0, 0, 0.86);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -81,7 +81,8 @@
   width: 100%;
   max-width: 1280px;
   margin-inline: auto;
-  padding: clamp(16px, 3vw, 36px) clamp(14px, 4vw, 40px) calc(96px + env(safe-area-inset-bottom));
+  padding: clamp(16px, 3vw, 36px) max(clamp(14px, 4vw, 40px), env(safe-area-inset-right)) calc(96px + env(safe-area-inset-bottom))
+    max(clamp(14px, 4vw, 40px), env(safe-area-inset-left));
 }
 @media (max-width: 560px) {
   .app__word,
@@ -1473,5 +1474,171 @@
 @media (prefers-reduced-motion: reduce) {
   .dcard {
     animation: none;
+  }
+}
+
+/* ---------- Secciones de la cuenta: pestañas arriba en computadora, barra de app abajo en el teléfono ---------- */
+.appnav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.appnav button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 10px 16px;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--ash);
+  font: inherit;
+  font-stretch: 75%;
+  font-weight: 600;
+  cursor: pointer;
+}
+.appnav button:hover {
+  color: var(--bone);
+}
+.appnav button.is-active {
+  color: var(--bone);
+  border-bottom-color: var(--red);
+}
+.appnav svg {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.appnav__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 8px rgba(255, 43, 28, 0.9);
+}
+.appnav .appnav__pay {
+  order: 5;
+  min-height: 40px;
+  margin: 0 0 6px auto;
+  padding: 8px 18px;
+  background: var(--red);
+  border-bottom: 0;
+  color: var(--black);
+  font-weight: 700;
+  --cut: 9px;
+  clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
+}
+.appnav .appnav__pay:hover {
+  background: var(--bone);
+  color: var(--black);
+}
+@media (max-width: 820px) {
+  .appnav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-items: end;
+    gap: 0;
+    padding: 6px max(6px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
+    background: #0a0304;
+    border-top: 1px solid var(--line);
+    border-bottom: 0;
+    overscroll-behavior: none;
+  }
+  .appnav button {
+    display: grid;
+    justify-items: center;
+    align-content: end;
+    gap: 3px;
+    min-height: 52px;
+    margin: 0;
+    padding: 6px 2px 4px;
+    border-bottom: 0;
+    font-size: 0.75rem;
+    line-height: 1.1;
+    transition: transform 0.12s;
+  }
+  .appnav button:active {
+    transform: scale(0.94);
+  }
+  .appnav svg {
+    width: 24px;
+    height: 24px;
+  }
+  .appnav button.is-active {
+    color: var(--red-hot);
+  }
+  .appnav__dot {
+    position: absolute;
+    top: 4px;
+    left: calc(50% + 9px);
+  }
+  /* Pagar va en el centro y sobresale: es lo que más se usa con el teléfono en la mano. */
+  .appnav .appnav__pay {
+    order: 0;
+    margin: 0;
+    padding: 0 2px 4px;
+    background: none;
+    clip-path: none;
+    color: var(--bone);
+  }
+  .appnav .appnav__pay:hover {
+    background: none;
+    color: var(--bone);
+  }
+  .appnav .appnav__pay svg {
+    box-sizing: content-box;
+    width: 26px;
+    height: 26px;
+    margin-top: -22px;
+    padding: 13px;
+    background: var(--red);
+    color: var(--black);
+    --cut: 11px;
+    clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
+  }
+  .wallet {
+    padding-bottom: 8px;
+  }
+}
+
+/* ---------- Instalar la app ---------- */
+.auth + .install {
+  max-width: 440px;
+  margin: 18px 0 0 auto;
+}
+.install__steps {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 1.3em;
+  color: var(--ash);
+}
+.install__steps strong {
+  color: var(--bone);
+}
+.install__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+@media (max-width: 820px) {
+  .auth + .install {
+    max-width: none;
   }
 }

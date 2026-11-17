@@ -7,9 +7,12 @@ import "./styles/hero.css";
 import "./styles/event.css";
 import "./styles/sections.css";
 import App from "./App";
+import { registerServiceWorker } from "./pwa";
 
 // La cuenta y el panel de caja se cargan aparte: la portada no descarga ese código.
 const AppRoot = lazy(() => import("./app/AppRoot"));
+
+registerServiceWorker();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

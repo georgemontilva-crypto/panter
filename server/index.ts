@@ -67,7 +67,16 @@ if (existsSync(dist)) {
     "/assets",
     express.static(resolve(dist, "assets"), { immutable: true, maxAge: "1y", fallthrough: false }),
   );
-  app.use(express.static(dist, { maxAge: "5m", index: false }));
+  app.use(
+    express.static(dist, {
+      maxAge: "5m",
+      index: false,
+      // El service worker y el manifiesto se revisan siempre contra el servidor: así una versión nueva llega de una.
+      setHeaders(res, file) {
+        if (file.endsWith("sw.js") || file.endsWith(".webmanifest")) res.setHeader("Cache-Control", "no-cache");
+      },
+    }),
+  );
   // Rutas de la aplicación (/cuenta, /caja...): todas cargan el mismo index.html.
   app.get(/^(?!\/api\/).*/, (_req, res) => {
     res.setHeader("Cache-Control", "no-cache");

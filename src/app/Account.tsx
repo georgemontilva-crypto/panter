@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { TX_LABEL, trpc, type MemberHome } from "./api";
+import { isIos, isStandalone, useInstallPrompt } from "../pwa";
 import PayCard from "./PayCard";
 import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, clock, countdown, duration, ref, useNowTick, when } from "./ui";
 
@@ -225,7 +226,20 @@ function ActivatePc({ home }: { home: MemberHome }) {
   const cost = Math.round((home.rates.pc * minutes) / 60);
   const enough = home.balanceCents >= cost;
 
-  if (pcs.data && pcs.data.length === 0) return null;
+  if (pcs.data && pcs.data.length === 0) {
+    return (
+      <Panel title="Activar una PC">
+        <p className="empty">Todavía no hay PCs para activar desde el teléfono. Pide tu tiempo en caja.</p>
+      </Panel>
+    );
+  }
+  if (!pcs.data) {
+    return (
+      <Panel title="Activar una PC">
+        <p className="empty">{pcs.error ? "No pudimos cargar las PCs. Revisa tu conexión." : "Cargando las PCs…"}</p>
+      </Panel>
+    );
+  }
   if (options.length === 0) {
     return (
       <Panel title="Activar una PC">
@@ -317,36 +331,45 @@ function ActivatePc({ home }: { home: MemberHome }) {
 }
 
 // ---------- Menú del mostrador y compras ----------
-function MenuAndOrders({ home, onPay }: { home: MemberHome; onPay: () => void }) {
+function MenuAndOrders({ home, offline, onPay }: { home: MemberHome; offline: boolean; onPay: () => void }) {
   const menu = trpc.member.menu.useQuery(undefined, { staleTime: 60_000 });
   const items = menu.data ?? [];
-  if (items.length === 0 && home.orders.length === 0) return null;
   const categories = [...new Set(items.map((p) => p.category))];
   return (
     <>
-      {items.length > 0 && (
-        <Panel title="Menú">
-          <p className="panel__lead">Pide en el mostrador y paga con tu tarjeta: escanean tu código y se descuenta de tu saldo.</p>
-          {categories.map((category) => (
-            <div className="menu-list" key={category}>
-              <h3>{category}</h3>
-              <ul>
-                {items
-                  .filter((p) => p.category === category)
-                  .map((p) => (
-                    <li key={p.id} className={p.priceCents > home.balanceCents ? "is-out" : undefined}>
-                      <span>{p.name}</span>
-                      <span>{ref(p.priceCents)}</span>
-                    </li>
-                  ))}
-              </ul>
-            </div>
-          ))}
-          <button className="btn menu-list__pay" type="button" onClick={onPay}>
-            Pagar con tarjeta Panter
-          </button>
-        </Panel>
-      )}
+      <Panel title="Menú">
+        {items.length === 0 ? (
+          <p className="empty">
+            {menu.isLoading
+              ? "Cargando el menú…"
+              : offline || menu.error
+                ? "Sin conexión no se puede cargar el menú. Pregunta en el mostrador: tu tarjeta sirve igual para pagar."
+                : "Todavía no hay productos en el menú. Pregunta en el mostrador qué hay hoy."}
+          </p>
+        ) : (
+          <>
+            <p className="panel__lead">Pide en el mostrador y paga con tu tarjeta: escanean tu código y se descuenta de tu saldo.</p>
+            {categories.map((category) => (
+              <div className="menu-list" key={category}>
+                <h3>{category}</h3>
+                <ul>
+                  {items
+                    .filter((p) => p.category === category)
+                    .map((p) => (
+                      <li key={p.id} className={p.priceCents > home.balanceCents ? "is-out" : undefined}>
+                        <span>{p.name}</span>
+                        <span>{ref(p.priceCents)}</span>
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            ))}
+          </>
+        )}
+        <button className="btn menu-list__pay" type="button" onClick={onPay}>
+          Pagar con tarjeta Panter
+        </button>
+      </Panel>
       {home.orders.length > 0 && (
         <Panel title="Mis compras">
           <ul className="moves">
@@ -369,104 +392,273 @@ function MenuAndOrders({ home, onPay }: { home: MemberHome; onPay: () => void })
   );
 }
 
+// ---------- Instalar la app ----------
+const INSTALL_DISMISSED = "panter:instalar-oculto";
+
+function InstallApp() {
+  const { available, install } = useInstallPrompt();
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return isStandalone() || localStorage.getItem(INSTALL_DISMISSED) === "1";
+    } catch {
+      return isStandalone();
+    }
+  });
+  const ios = isIos();
+  if (hidden || (!available && !ios)) return null;
+  const dismiss = () => {
+    setHidden(true);
+    try {
+      localStorage.setItem(INSTALL_DISMISSED, "1");
+    } catch {
+      /* sin almacenamiento: se oculta solo por esta vez */
+    }
+  };
+  return (
+    <Panel className="install" title="Instala Arena Panter">
+      {available ? (
+        <p className="panel__lead">Queda con su icono en tu teléfono, abre a pantalla completa y muestra tu tarjeta aunque no tengas señal.</p>
+      ) : (
+        <ol className="install__steps">
+          <li>
+            Abre esta página en <strong>Safari</strong>.
+          </li>
+          <li>
+            Toca <strong>Compartir</strong>, el cuadro con la flecha hacia arriba.
+          </li>
+          <li>
+            Elige <strong>Agregar a inicio</strong>.
+          </li>
+        </ol>
+      )}
+      <div className="install__actions">
+        {available && (
+          <button className="btn" type="button" onClick={() => void install().then((accepted) => accepted && setHidden(true))}>
+            Instalar la app
+          </button>
+        )}
+        <button className="btn btn--ghost" type="button" onClick={dismiss}>
+          Ahora no
+        </button>
+      </div>
+    </Panel>
+  );
+}
+
 // ---------- Perfil ----------
-function Wallet({ home }: { home: MemberHome }) {
+type View = "tarjeta" | "jugar" | "menu" | "movimientos";
+
+const icon = (d: string) => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d={d} />
+  </svg>
+);
+const VIEWS: { id: View; label: string; icon: ReturnType<typeof icon> }[] = [
+  { id: "tarjeta", label: "Tarjeta", icon: icon("M3 6.5h18v11H3zM3 10.5h18M6.5 14.5h4") },
+  { id: "jugar", label: "Jugar", icon: icon("M3 5h18v11H3zM9 20h6M12 16v4") },
+  { id: "menu", label: "Menú", icon: icon("M6 9h12l-1.2 11H7.2zM4.5 9h15M12 9V5l3.5-1.5") },
+  { id: "movimientos", label: "Historial", icon: icon("M8 6.5h12M8 12h12M8 17.5h12M4 6.5h.5M4 12h.5M4 17.5h.5") },
+];
+const isView = (value: string | null): value is View => VIEWS.some((v) => v.id === value);
+
+function Wallet({ home, offlineSince }: { home: MemberHome; offlineSince?: number }) {
+  const [params] = useSearchParams();
+  const offline = offlineSince !== undefined;
   const { current, next } = home.level;
   const span = next ? next.min - current.min : 1;
   const progress = next ? Math.min(1, (home.visitsCount - current.min) / span) : 1;
   const toBonus = home.loyalty.bonusCents > 0 ? home.loyalty.every - (home.visitsCount % home.loyalty.every) : null;
-  const [paying, setPaying] = useState(false);
+  // El QR de una PC (/cuenta?pc=7&c=1234) y los atajos de la app instalada abren directo en su sección.
+  const wantedView = params.get("ver");
+  const [view, setView] = useState<View>(() => (params.has("pc") ? "jugar" : isView(wantedView) ? wantedView : "tarjeta"));
+  const [paying, setPaying] = useState(() => params.get("pagar") === "1");
+  const now = useNowTick(offline ? 1000 : 60_000);
+  // Sin conexión no se sabe si una sesión siguió o terminó: se dejan de mostrar las que ya vencieron.
+  const sessions = offline ? home.sessions.filter((s) => s.graceEndsAt > now) : home.sessions;
+  const playing = sessions.length > 0;
+
+  const go = (next: View) => {
+    setView(next);
+    window.scrollTo({ top: 0 });
+  };
 
   return (
     <div className="wallet">
-      {/* Con una sesión en curso, el contador va primero: es lo que el cliente viene a mirar. */}
-      {home.sessions.map((s) => (
-        <ActiveSession key={s.id} home={home} session={s} />
-      ))}
-      <div className="wallet__top">
-        <div className="wallet__card">
-          <MemberCard name={home.name} code={home.memberCode} qr={home.cardQr} level={current.name} balanceCents={home.balanceCents} />
-          <button className="btn wallet__pay" type="button" onClick={() => setPaying(true)}>
-            Pagar con tarjeta Panter
+      <nav className="appnav" aria-label="Secciones de tu cuenta">
+        {VIEWS.slice(0, 2).map((v) => (
+          <button key={v.id} type="button" className={view === v.id ? "is-active" : undefined} aria-current={view === v.id ? "page" : undefined} onClick={() => go(v.id)}>
+            {v.icon}
+            <span>{v.label}</span>
+            {v.id === "jugar" && playing && <i className="appnav__dot" aria-label="Estás jugando" />}
           </button>
-          <p className="wallet__hint">Abre tu tarjeta con el código en grande. También sirve para recargar en caja.</p>
-        </div>
-        <div className="wallet__side">
-          <Panel className="loyalty">
-            <p className="loyalty__count">
-              <strong>{home.visitsCount}</strong> {home.visitsCount === 1 ? "visita" : "visitas"}
-            </p>
-            <div className="loyalty__bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} aria-label="Avance al siguiente nivel">
-              <span style={{ width: `${progress * 100}%` }} />
+        ))}
+        <button type="button" className="appnav__pay" onClick={() => setPaying(true)}>
+          {icon("M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2.5v2.5H14zM17.5 17.5H20V20h-2.5zM14 19.5h1M19.5 14h.5")}
+          <span>Pagar</span>
+        </button>
+        {VIEWS.slice(2).map((v) => (
+          <button key={v.id} type="button" className={view === v.id ? "is-active" : undefined} aria-current={view === v.id ? "page" : undefined} onClick={() => go(v.id)}>
+            {v.icon}
+            <span>{v.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      {offline && (
+        <Notice kind="info">
+          Sin conexión. Así estaba tu tarjeta el {when(offlineSince)}; tu código sirve igual para pagar.
+        </Notice>
+      )}
+
+      {/* Con una sesión en curso, el contador va primero: es lo que el cliente viene a mirar. */}
+      {(view === "tarjeta" || view === "jugar") && sessions.map((s) => <ActiveSession key={s.id} home={home} session={s} />)}
+
+      {view === "tarjeta" && (
+        <>
+          <div className="wallet__top">
+            <div className="wallet__card">
+              <MemberCard name={home.name} code={home.memberCode} qr={home.cardQr} level={current.name} balanceCents={home.balanceCents} />
+              <button className="btn wallet__pay" type="button" onClick={() => setPaying(true)}>
+                Pagar con tarjeta Panter
+              </button>
+              <p className="wallet__hint">Abre tu tarjeta con el código en grande. También sirve para recargar en caja.</p>
             </div>
-            <p className="loyalty__next">
-              {next
-                ? `Nivel ${current.name}. Te faltan ${next.min - home.visitsCount} para ${next.name}.`
-                : `Nivel ${current.name}: el más alto de la arena.`}
-              {toBonus !== null && ` En ${toBonus} ${toBonus === 1 ? "visita" : "visitas"} más ganas ${ref(home.loyalty.bonusCents)} de bono.`}
-            </p>
+            <div className="wallet__side">
+              <Panel className="loyalty">
+                <p className="loyalty__count">
+                  <strong>{home.visitsCount}</strong> {home.visitsCount === 1 ? "visita" : "visitas"}
+                </p>
+                <div className="loyalty__bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} aria-label="Avance al siguiente nivel">
+                  <span style={{ width: `${progress * 100}%` }} />
+                </div>
+                <p className="loyalty__next">
+                  {next
+                    ? `Nivel ${current.name}. Te faltan ${next.min - home.visitsCount} para ${next.name}.`
+                    : `Nivel ${current.name}: el más alto de la arena.`}
+                  {toBonus !== null && ` En ${toBonus} ${toBonus === 1 ? "visita" : "visitas"} más ganas ${ref(home.loyalty.bonusCents)} de bono.`}
+                </p>
+              </Panel>
+              <InstallApp />
+            </div>
+          </div>
+        </>
+      )}
+
+      {view === "jugar" &&
+        !playing &&
+        (offline ? (
+          <Panel title="Activar una PC">
+            <p className="empty">Necesitas conexión para activar una PC. Revisa tu señal o conéctate al wifi de la arena.</p>
           </Panel>
-        </div>
-      </div>
-
-      {home.sessions.length === 0 && <ActivatePc home={home} />}
-      <MenuAndOrders home={home} onPay={() => setPaying(true)} />
-
-      <Panel title="Movimientos">
-        {home.tx.length === 0 ? (
-          <p className="empty">Todavía no hay movimientos. Tu primera recarga aparecerá aquí.</p>
         ) : (
-          <ul className="moves">
-            {home.tx.map((t) => (
-              <li key={t.id}>
-                <span className="moves__what">
-                  {TX_LABEL[t.type]}
-                  <small>
-                    {when(t.createdAt)}
-                    {t.type === "card_sale" ? ", pagada en caja" : t.note ? `, ${t.note}` : ""}
-                  </small>
-                </span>
-                <span className={`moves__amount${t.amountCents > 0 ? " is-plus" : ""}`}>
-                  {t.amountCents > 0 ? "+" : ""}
-                  {t.type === "card_sale" ? ref(t.paidCents) : ref(t.amountCents)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Panel>
+          <ActivatePc home={home} />
+        ))}
+
+      {view === "menu" && <MenuAndOrders home={home} offline={offline} onPay={() => setPaying(true)} />}
+
+      {view === "movimientos" && (
+        <Panel title="Movimientos">
+          {home.tx.length === 0 ? (
+            <p className="empty">Todavía no hay movimientos. Tu primera recarga aparecerá aquí.</p>
+          ) : (
+            <ul className="moves">
+              {home.tx.map((t) => (
+                <li key={t.id}>
+                  <span className="moves__what">
+                    {TX_LABEL[t.type]}
+                    <small>
+                      {when(t.createdAt)}
+                      {t.type === "card_sale" ? ", pagada en caja" : t.note ? `, ${t.note}` : ""}
+                    </small>
+                  </span>
+                  <span className={`moves__amount${t.amountCents > 0 ? " is-plus" : ""}`}>
+                    {t.amountCents > 0 ? "+" : ""}
+                    {t.type === "card_sale" ? ref(t.paidCents) : ref(t.amountCents)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      )}
       {paying && <PayCard home={home} onClose={() => setPaying(false)} />}
     </div>
   );
 }
+
+// ---------- Copia de la tarjeta para cuando no hay conexión ----------
+// Se guarda en el propio teléfono lo último que se vio, y se borra al salir de la cuenta.
+const HOME_CACHE = "panter:tarjeta";
+const HOME_CACHE_VERSION = 1;
+
+function readHomeCache(): { at: number; home: MemberHome } | null {
+  try {
+    const saved = JSON.parse(localStorage.getItem(HOME_CACHE) ?? "null");
+    return saved?.v === HOME_CACHE_VERSION && saved.home?.cardQr ? { at: saved.at, home: saved.home } : null;
+  } catch {
+    return null;
+  }
+}
+function writeHomeCache(home: MemberHome | null) {
+  try {
+    if (home) localStorage.setItem(HOME_CACHE, JSON.stringify({ v: HOME_CACHE_VERSION, at: Date.now(), home }));
+    else localStorage.removeItem(HOME_CACHE);
+  } catch {
+    /* almacenamiento lleno o bloqueado: la app sigue funcionando con conexión */
+  }
+}
+/** Fallo de red (sin respuesta del servidor), a diferencia de un error que el servidor sí contestó. */
+const isNetworkError = (error: { data?: unknown } | null) => Boolean(error) && !error?.data;
 
 export default function Account() {
   const utils = trpc.useUtils();
   const me = trpc.auth.me.useQuery(undefined, { retry: false });
   const isMember = me.data?.role === "member";
   const home = trpc.member.home.useQuery(undefined, { enabled: isMember, refetchInterval: 10_000 });
-  const logout = trpc.auth.logout.useMutation({ onSuccess: () => utils.invalidate() });
+  const logout = trpc.auth.logout.useMutation({
+    onSuccess: () => {
+      writeHomeCache(null);
+      return utils.invalidate();
+    },
+  });
+  const [saved] = useState(readHomeCache);
+  const netDown = isNetworkError(me.error) || isNetworkError(home.error);
+
+  useEffect(() => {
+    if (home.data && !home.error) writeHomeCache(home.data);
+  }, [home.data, home.error]);
+  // El servidor respondió que no hay sesión: la copia guardada ya no es de nadie.
+  useEffect(() => {
+    if (me.isSuccess && !me.isFetching && !me.data) writeHomeCache(null);
+  }, [me.isSuccess, me.isFetching, me.data]);
 
   // El personal tiene su propia entrada: si llega aquí con la sesión abierta, va a su panel.
   if (me.data && !isMember) return <Navigate to="/caja" replace />;
+
+  const offlineHome = netDown ? (home.data ? { at: home.dataUpdatedAt, home: home.data } : saved) : null;
 
   return (
     <Shell
       title="Mi cuenta"
       right={
-        me.data && (
-          <button className="app__link" type="button" onClick={() => logout.mutate()}>
+        (me.data || offlineHome) && (
+          <button className="app__link" type="button" disabled={logout.isPending} onClick={() => logout.mutate()}>
             Salir
           </button>
         )
       }
     >
-      {me.isLoading ? (
+      {offlineHome ? (
+        <Wallet home={offlineHome.home} offlineSince={offlineHome.at} />
+      ) : me.isLoading ? (
         <p className="empty">Cargando…</p>
       ) : me.error ? (
-        <Notice>{me.error.message || "No pudimos conectar con el servidor. Revisa tu conexión e intenta otra vez."}</Notice>
+        <Notice>{isNetworkError(me.error) ? "No hay conexión con Arena Panter. Revisa tu señal e intenta otra vez." : me.error.message}</Notice>
       ) : !me.data ? (
-        <AuthForms />
+        <>
+          <AuthForms />
+          <InstallApp />
+        </>
       ) : home.data ? (
         <Wallet home={home.data} />
       ) : (

@@ -1,15 +1,34 @@
 {
+  "id": "/cuenta",
   "name": "Arena Panter",
-  "short_name": "Panter",
-  "description": "Tu tarjeta Panter: saldo, visitas y activación de PCs.",
+  "short_name": "Arena Panter",
+  "description": "Tu tarjeta Panter: saldo, pagos en el mostrador, visitas y activación de PCs.",
   "lang": "es",
+  "dir": "ltr",
   "start_url": "/cuenta",
   "scope": "/",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
+  "categories": ["entertainment", "games"],
   "icons": [
-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Pagar con tarjeta Panter",
+      "short_name": "Pagar",
+      "url": "/cuenta?pagar=1",
+      "icons": [{ "src": "/icon-maskable-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Activar una PC",
+      "short_name": "Jugar",
+      "url": "/cuenta?ver=jugar",
+      "icons": [{ "src": "/icon-maskable-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
   ]
 }

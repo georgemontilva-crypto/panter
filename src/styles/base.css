@@ -46,6 +46,13 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
+/* Teléfono acostado con muesca: el contenido no queda debajo de ella. */
+@supports (padding: env(safe-area-inset-left)) {
+  body {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
 body.no-scroll {
   overflow: hidden;
 }

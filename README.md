@@ -60,6 +60,10 @@ npm start            # lo que corre en producción
 - Al activar una estación se cobra el tiempo completo por adelantado. Si la sesión se termina antes, se devuelve
   el tiempo no usado (se puede apagar en Ajustes).
 - Al llegar a cero empiezan los minutos de gracia (5 por defecto) para guardar la partida; luego la PC se bloquea.
+- **App instalable (PWA):** se llama Arena Panter y abre en `/cuenta` a pantalla completa. `pwa/sw.js` es la plantilla
+  del service worker; `vite.config.ts` la completa al compilar con los archivos de esa versión y la deja en `/sw.js`.
+  Guarda la app en el teléfono (abre al instante y sin conexión) y nunca guarda nada de `/api`. La última tarjeta vista
+  se guarda en el propio teléfono para mostrarla sin señal, y se borra al salir de la cuenta.
 - **Entradas separadas:** los clientes entran solo por `/cuenta` y el personal solo por `/caja`. Una cuenta de cliente
   no abre sesión en la entrada del personal, ni al revés. El personal no se registra: lo crea un administrador en Ajustes.
 - Una visita = un día con al menos una sesión, una compra o un check-in en caja.
