@@ -4,6 +4,8 @@ import { KIND_NAMES, METHODS, TX_LABEL, methodLabel, trpc, type BoardStation, ty
 import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, clock, countdown, duration, parseMoney, ref, useNowTick, when } from "./ui";
 
 const Admin = lazy(() => import("./Admin"));
+// El lector de QR se descarga solo cuando se abre la cámara.
+const Scanner = lazy(() => import("./Scanner"));
 const KINDS: StationKind[] = ["pc", "ps5", "switch", "sim"];
 const STAFF_DURATIONS = [30, 60, 90, 120, 180, 240];
 
@@ -227,6 +229,7 @@ function Clients() {
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const [form, setForm] = useState({ name: "", phone: "" });
   const results = trpc.staff.find.useQuery({ q }, { enabled: q.length >= 2 });
   const create = trpc.staff.createMember.useMutation({
@@ -254,13 +257,33 @@ function Clients() {
               setQ(text.trim());
             }}
           >
-            <Field label="Buscar cliente" hint="Escanea el QR de la tarjeta, o escribe nombre, teléfono o código.">
-              <input value={text} onChange={(e) => setText(e.target.value)} autoFocus placeholder="Escanea o escribe y pulsa Enter" />
+            <Field label="Buscar cliente" hint="Escribe nombre, teléfono o código. Con un lector USB, escanea la tarjeta aquí.">
+              <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Nombre, teléfono o código" enterKeyHint="search" />
             </Field>
-            <button className="btn btn--small" type="submit">
-              Buscar
-            </button>
+            <div className="form__pair">
+              <button className="btn" type="submit">
+                Buscar
+              </button>
+              <button className="btn btn--ghost" type="button" onClick={() => setScanning(true)}>
+                Escanear con la cámara
+              </button>
+            </div>
           </form>
+          {scanning && (
+            <Suspense fallback={null}>
+              <Scanner
+                title="Escanear tarjeta"
+                hint="Apunta al QR de la tarjeta del cliente."
+                onClose={() => setScanning(false)}
+                onResult={(value) => {
+                  setScanning(false);
+                  setText(value.trim());
+                  setSelected(null);
+                  setQ(value.trim());
+                }}
+              />
+            </Suspense>
+          )}
           {q.length >= 2 && results.data && results.data.length === 0 && <p className="empty">Nadie coincide con “{q}”. Revisa el dato o registra al cliente.</p>}
           {results.data && results.data.length > 1 && (
             <ul className="results">
@@ -415,24 +438,26 @@ function Day() {
               </div>
             </dl>
             {d.byMethod.length > 0 && (
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Forma de pago</th>
-                    <th>Operaciones</th>
-                    <th className="num">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {d.byMethod.map((r) => (
-                    <tr key={r.method ?? "x"}>
-                      <td>{methodLabel(r.method) || "Sin método"}</td>
-                      <td>{r.count}</td>
-                      <td className="num">{ref(r.totalCents)}</td>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Forma de pago</th>
+                      <th>Operaciones</th>
+                      <th className="num">Total</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {d.byMethod.map((r) => (
+                      <tr key={r.method ?? "x"}>
+                        <td>{methodLabel(r.method) || "Sin método"}</td>
+                        <td>{r.count}</td>
+                        <td className="num">{ref(r.totalCents)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </>
         )}

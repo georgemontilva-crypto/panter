@@ -245,22 +245,24 @@ function StaffAdmin() {
         </button>
       </form>
       <Notice>{create.error?.message ?? setActive.error?.message}</Notice>
-      <table className="table">
-        <tbody>
-          {list.data?.map((u) => (
-            <tr key={u.id}>
-              <td>{u.name}</td>
-              <td>{u.phone}</td>
-              <td>{u.role === "admin" ? "Administrador" : "Cajero"}</td>
-              <td className="actions">
-                <button type="button" onClick={() => setActive.mutate({ id: u.id, active: !u.active })}>
-                  {u.active ? "Desactivar" : "Reactivar"}
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="table-wrap">
+        <table className="table">
+          <tbody>
+            {list.data?.map((u) => (
+              <tr key={u.id}>
+                <td>{u.name}</td>
+                <td>{u.phone}</td>
+                <td>{u.role === "admin" ? "Administrador" : "Cajero"}</td>
+                <td className="actions">
+                  <button type="button" onClick={() => setActive.mutate({ id: u.id, active: !u.active })}>
+                    {u.active ? "Desactivar" : "Reactivar"}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Panel>
   );
 }

@@ -1,7 +1,9 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { Suspense, lazy, useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { TX_LABEL, trpc, type MemberHome } from "./api";
 import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, countdown, duration, ref, useNowTick, when } from "./ui";
+
+const Scanner = lazy(() => import("./Scanner"));
 
 // ---------- Entrar / crear cuenta / activar tarjeta ----------
 type AuthMode = "login" | "register" | "claim";
@@ -147,6 +149,8 @@ function ActivatePc({ home }: { home: MemberHome }) {
   const [selected, setSelected] = useState<number | null>(null);
   const [code, setCode] = useState(params.get("c") ?? "");
   const [minutes, setMinutes] = useState(60);
+  const [scanning, setScanning] = useState(false);
+  const [scanProblem, setScanProblem] = useState("");
   const start = trpc.member.start.useMutation({
     onSuccess: () => {
       setSelected(null);
@@ -164,6 +168,33 @@ function ActivatePc({ home }: { home: MemberHome }) {
     if (match) setSelected(match.id);
   }, [wanted, pcs.data, selected]);
 
+  // El QR de la pantalla de bloqueo es un enlace con el número de la PC y su código.
+  const onScan = (value: string) => {
+    setScanning(false);
+    let number = 0;
+    let scannedCode = "";
+    try {
+      const url = new URL(value);
+      number = Number(url.searchParams.get("pc"));
+      scannedCode = url.searchParams.get("c") ?? "";
+    } catch {
+      /* no es un enlace */
+    }
+    const match = pcs.data?.find((p) => p.number === number);
+    if (!match || !/^\d{4}$/.test(scannedCode)) {
+      setScanProblem("Ese QR no es el de una PC de la arena. Apunta al que aparece en la pantalla bloqueada.");
+      return;
+    }
+    if (match.state !== "libre") {
+      setScanProblem(`${match.label} no está libre en este momento. Elige otra.`);
+      return;
+    }
+    setScanProblem("");
+    start.reset();
+    setSelected(match.id);
+    setCode(scannedCode);
+  };
+
   const pc = pcs.data?.find((p) => p.id === selected) ?? null;
   const cost = Math.round((home.rates.pc * minutes) / 60);
   const enough = home.balanceCents >= cost;
@@ -172,7 +203,16 @@ function ActivatePc({ home }: { home: MemberHome }) {
 
   return (
     <Panel title="Activar una PC">
-      <p className="panel__lead">Siéntate en una PC libre, elígela aquí y escribe el código que muestra su pantalla.</p>
+      <p className="panel__lead">Siéntate en una PC libre y escanea el QR de su pantalla. También puedes elegirla aquí y escribir su código.</p>
+      <button className="btn activate__scan" type="button" onClick={() => setScanning(true)}>
+        Escanear el QR de la PC
+      </button>
+      <Notice>{scanProblem}</Notice>
+      {scanning && (
+        <Suspense fallback={null}>
+          <Scanner title="Escanear la PC" hint="Apunta al QR que muestra la pantalla bloqueada." onClose={() => setScanning(false)} onResult={onScan} />
+        </Suspense>
+      )}
       <ul className="pcgrid">
         {pcs.data?.map((p) => (
           <li key={p.id}>
@@ -247,6 +287,10 @@ function Wallet({ home }: { home: MemberHome }) {
 
   return (
     <div className="wallet">
+      {/* Con una sesión en curso, el contador va primero: es lo que el cliente viene a mirar. */}
+      {home.sessions.map((s) => (
+        <ActiveSession key={s.id} home={home} session={s} />
+      ))}
       <div className="wallet__top">
         <MemberCard name={home.name} code={home.memberCode} qr={home.cardQr} level={current.name} />
         <div className="wallet__side">
@@ -274,9 +318,6 @@ function Wallet({ home }: { home: MemberHome }) {
         </div>
       </div>
 
-      {home.sessions.map((s) => (
-        <ActiveSession key={s.id} home={home} session={s} />
-      ))}
       {home.sessions.length === 0 && <ActivatePc home={home} />}
 
       <Panel title="Movimientos">

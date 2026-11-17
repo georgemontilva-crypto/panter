@@ -1,0 +1,15 @@
+{
+  "name": "Arena Panter",
+  "short_name": "Panter",
+  "description": "Tu tarjeta Panter: saldo, visitas y activación de PCs.",
+  "lang": "es",
+  "start_url": "/cuenta",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
