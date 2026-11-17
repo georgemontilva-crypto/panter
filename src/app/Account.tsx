@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState, type FormEvent } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { TX_LABEL, trpc, type MemberHome } from "./api";
 import PayCard from "./PayCard";
 import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, clock, countdown, duration, ref, useNowTick, when } from "./ui";
@@ -12,7 +12,7 @@ type AuthMode = "login" | "register" | "claim";
 function AuthForms() {
   const utils = trpc.useUtils();
   const [mode, setMode] = useState<AuthMode>("login");
-  const [form, setForm] = useState({ name: "", phone: "", password: "", code: "" });
+  const [form, setForm] = useState({ name: "", user: "", email: "", phone: "", password: "", code: "" });
   const done = { onSuccess: () => utils.invalidate() };
   const login = trpc.auth.login.useMutation(done);
   const register = trpc.auth.register.useMutation(done);
@@ -22,9 +22,9 @@ function AuthForms() {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (mode === "login") login.mutate({ identifier: form.phone, password: form.password });
-    else if (mode === "register") register.mutate({ name: form.name, phone: form.phone, password: form.password });
-    else claim.mutate({ memberCode: form.code, phone: form.phone, password: form.password });
+    if (mode === "login") login.mutate({ identifier: form.user, password: form.password, area: "member" });
+    else if (mode === "register") register.mutate({ name: form.name, email: form.email, phone: form.phone, password: form.password });
+    else claim.mutate({ memberCode: form.code, phone: form.phone, email: form.email, password: form.password });
   };
 
   const tabs: { id: AuthMode; label: string }[] = [
@@ -73,9 +73,20 @@ function AuthForms() {
               <input value={form.code} onChange={set("code")} placeholder="PNT-" autoCapitalize="characters" required />
             </Field>
           )}
-          <Field label="Teléfono" hint={mode === "claim" ? "El mismo que diste en caja." : undefined}>
-            <input value={form.phone} onChange={set("phone")} type="tel" inputMode="tel" autoComplete="tel" placeholder="0414 1234567" required />
-          </Field>
+          {mode === "login" ? (
+            <Field label="Correo o teléfono">
+              <input value={form.user} onChange={set("user")} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
+            </Field>
+          ) : (
+            <>
+              <Field label="Correo">
+                <input value={form.email} onChange={set("email")} type="email" inputMode="email" autoComplete="email" autoCapitalize="none" placeholder="nombre@correo.com" required />
+              </Field>
+              <Field label="Teléfono celular" hint={mode === "claim" ? "El mismo que diste en caja." : undefined}>
+                <input value={form.phone} onChange={set("phone")} type="tel" inputMode="tel" autoComplete="tel" placeholder="0414 1234567" required />
+              </Field>
+            </>
+          )}
           <Field label={mode === "login" ? "Contraseña" : "Crea una contraseña"} hint={mode === "login" ? undefined : "Mínimo 6 caracteres."}>
             <input
               value={form.password}
@@ -90,6 +101,9 @@ function AuthForms() {
             {mode === "login" ? "Entrar" : mode === "register" ? "Crear mi cuenta" : "Activar mi cuenta"}
           </button>
         </form>
+        <p className="auth__other">
+          ¿Trabajas en la arena? <Link to="/caja">Entra por el acceso del personal</Link>.
+        </p>
       </Panel>
     </div>
   );
@@ -429,24 +443,21 @@ function Wallet({ home }: { home: MemberHome }) {
 export default function Account() {
   const utils = trpc.useUtils();
   const me = trpc.auth.me.useQuery(undefined, { retry: false });
-  const home = trpc.member.home.useQuery(undefined, { enabled: Boolean(me.data), refetchInterval: 10_000 });
+  const isMember = me.data?.role === "member";
+  const home = trpc.member.home.useQuery(undefined, { enabled: isMember, refetchInterval: 10_000 });
   const logout = trpc.auth.logout.useMutation({ onSuccess: () => utils.invalidate() });
+
+  // El personal tiene su propia entrada: si llega aquí con la sesión abierta, va a su panel.
+  if (me.data && !isMember) return <Navigate to="/caja" replace />;
 
   return (
     <Shell
       title="Mi cuenta"
       right={
         me.data && (
-          <>
-            {me.data.role !== "member" && (
-              <Link className="app__link" to="/caja">
-                Panel de caja
-              </Link>
-            )}
-            <button className="app__link" type="button" onClick={() => logout.mutate()}>
-              Salir
-            </button>
-          </>
+          <button className="app__link" type="button" onClick={() => logout.mutate()}>
+            Salir
+          </button>
         )
       }
     >

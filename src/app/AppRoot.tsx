@@ -18,6 +18,7 @@ export default function AppRoot() {
         <Routes>
           <Route path="cuenta" element={<Account />} />
           <Route path="caja" element={<Staff />} />
+          <Route path="admin" element={<Navigate to="/caja" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </QueryClientProvider>

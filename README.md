@@ -11,8 +11,8 @@ visitas y niveles de fidelidad, panel de caja y control de las PC.
 | Ruta | Para quién | Qué hace |
 | --- | --- | --- |
 | `/` | Público | Portada, evento, estaciones, horario |
-| `/cuenta` | Clientes | Registro, tarjeta digital con QR, saldo, visitas, activar una PC |
-| `/caja` | Cajeros y administradores | Clientes, recargas, cobro del menú con el saldo, venta de tarjeta, estaciones, cierre del día |
+| `/cuenta` | Clientes | Registro con correo, teléfono celular y contraseña; tarjeta digital con QR, saldo, visitas, activar una PC |
+| `/caja` | Cajeros y administradores | Entrada propia del personal (`/admin` lleva aquí). Clientes, recargas, cobro del menú con el saldo, venta de tarjeta, estaciones, cierre del día |
 | `/caja` → Ajustes | Administradores | Tarifas, horario, menú del mostrador, estaciones y credenciales, personal, base de clientes |
 | `POST /api/agent/heartbeat` | Programa de bloqueo | Cada PC pregunta su estado con su credencial |
 
@@ -60,6 +60,8 @@ npm start            # lo que corre en producción
 - Al activar una estación se cobra el tiempo completo por adelantado. Si la sesión se termina antes, se devuelve
   el tiempo no usado (se puede apagar en Ajustes).
 - Al llegar a cero empiezan los minutos de gracia (5 por defecto) para guardar la partida; luego la PC se bloquea.
+- **Entradas separadas:** los clientes entran solo por `/cuenta` y el personal solo por `/caja`. Una cuenta de cliente
+  no abre sesión en la entrada del personal, ni al revés. El personal no se registra: lo crea un administrador en Ajustes.
 - Una visita = un día con al menos una sesión, una compra o un check-in en caja.
 - **Compras del menú:** el cajero escanea la tarjeta, arma el pedido y se descuenta del saldo. Si no alcanza,
   no se crea la orden ni se cobra nada. Cada orden guarda sus renglones con el nombre y el precio de ese momento

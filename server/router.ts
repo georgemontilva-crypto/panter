@@ -34,6 +34,11 @@ const phone = z
   .refine((v) => v.length >= 10 && v.length <= 15, "Escribe un teléfono válido, por ejemplo 0414 1234567.");
 const password = z.string().min(6, "La contraseña debe tener al menos 6 caracteres.").max(72);
 const email = z.union([z.literal(""), z.email("Ese correo no parece válido.")]).optional();
+const requiredEmail = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .pipe(z.email("Escribe un correo válido, por ejemplo nombre@correo.com.").max(190));
 const id = z.number().int().positive();
 const selfMinutes = z.number().int().min(30).max(600).multipleOf(30, "El tiempo va en bloques de 30 minutos.");
 const staffMinutes = z.number().int().min(15).max(720).multipleOf(15, "El tiempo va en bloques de 15 minutos.");
@@ -91,45 +96,57 @@ async function getMember(userId: number) {
 const authRouter = router({
   me: publicProcedure.query(({ ctx }) => (ctx.user ? publicUser(ctx.user) : null)),
 
-  register: publicProcedure.input(z.object({ name, phone, password, email })).mutation(async ({ ctx, input }) => {
+  // Registro de clientes: nombre, correo, teléfono celular y contraseña. Siempre nace como cliente.
+  register: publicProcedure.input(z.object({ name, email: requiredEmail, phone, password })).mutation(async ({ ctx, input }) => {
     rateLimit(`register:${ctx.req.ip}`, 6);
     const userId = await createUser({
       name: input.name,
       phone: input.phone,
-      email: input.email?.toLowerCase(),
+      email: input.email,
       passwordHash: await hashPassword(input.password),
     });
     await startLogin(ctx.res, userId);
     return { ok: true };
   }),
 
-  login: publicProcedure.input(z.object({ identifier: z.string().trim().min(3).max(190), password: z.string().min(1).max(72) })).mutation(async ({ ctx, input }) => {
-    const key = `login:${ctx.req.ip}:${input.identifier.toLowerCase()}`;
-    rateLimit(key);
-    const byEmail = input.identifier.includes("@");
-    const [u] = await db
-      .select()
-      .from(users)
-      .where(byEmail ? eq(users.email, input.identifier.toLowerCase()) : eq(users.phone, normalizePhone(input.identifier)));
-    if (!u || !u.active || !u.passwordHash || !(await checkPassword(input.password, u.passwordHash))) {
-      fail("UNAUTHORIZED", "Teléfono o contraseña incorrectos.");
-    }
-    clearRateLimit(key);
-    await startLogin(ctx.res, u.id);
-    return publicUser(u);
-  }),
+  // Dos entradas separadas: "member" es la de los clientes (/cuenta) y "staff" la del personal (/caja).
+  // Cada cuenta entra solo por la suya, así un cliente nunca abre sesión en el panel ni al revés.
+  login: publicProcedure
+    .input(z.object({ identifier: z.string().trim().min(3).max(190), password: z.string().min(1).max(72), area: z.enum(["member", "staff"]).default("member") }))
+    .mutation(async ({ ctx, input }) => {
+      const key = `login:${ctx.req.ip}:${input.identifier.toLowerCase()}`;
+      rateLimit(key);
+      const byEmail = input.identifier.includes("@");
+      const [u] = await db
+        .select()
+        .from(users)
+        .where(byEmail ? eq(users.email, input.identifier.toLowerCase()) : eq(users.phone, normalizePhone(input.identifier)));
+      if (!u || !u.active || !u.passwordHash || !(await checkPassword(input.password, u.passwordHash))) {
+        fail("UNAUTHORIZED", "Los datos no coinciden. Revisa el correo o teléfono y la contraseña.");
+      }
+      const isStaff = u.role !== "member";
+      if (input.area === "staff" && !isStaff) fail("FORBIDDEN", "Esta entrada es solo para el personal. Si eres cliente, entra por Mi cuenta.");
+      if (input.area === "member" && isStaff) fail("FORBIDDEN", "Esta cuenta es del personal. Entra por el acceso del personal.");
+      clearRateLimit(key);
+      await startLogin(ctx.res, u.id);
+      return publicUser(u);
+    }),
 
-  // Clientes registrados en caja: crean su contraseña con el código de su tarjeta y su teléfono.
-  claim: publicProcedure.input(z.object({ memberCode: z.string().trim().toUpperCase().min(6).max(16), phone, password })).mutation(async ({ ctx, input }) => {
-    rateLimit(`claim:${ctx.req.ip}`, 6);
-    const code = input.memberCode.startsWith("PNT-") ? input.memberCode : `PNT-${input.memberCode}`;
-    const [u] = await db.select().from(users).where(and(eq(users.memberCode, code), eq(users.phone, input.phone)));
-    if (!u || !u.active) fail("NOT_FOUND", "El código y el teléfono no coinciden con ninguna tarjeta.");
-    if (u.passwordHash) fail("CONFLICT", "Esa tarjeta ya tiene cuenta. Inicia sesión con tu teléfono y contraseña.");
-    await db.update(users).set({ passwordHash: await hashPassword(input.password) }).where(eq(users.id, u.id));
-    await startLogin(ctx.res, u.id);
-    return { ok: true };
-  }),
+  // Clientes registrados en caja: crean su contraseña con el código de su tarjeta y su teléfono, y dejan su correo.
+  claim: publicProcedure
+    .input(z.object({ memberCode: z.string().trim().toUpperCase().min(6).max(16), phone, email: requiredEmail, password }))
+    .mutation(async ({ ctx, input }) => {
+      rateLimit(`claim:${ctx.req.ip}`, 6);
+      const code = input.memberCode.startsWith("PNT-") ? input.memberCode : `PNT-${input.memberCode}`;
+      const [u] = await db.select().from(users).where(and(eq(users.memberCode, code), eq(users.phone, input.phone)));
+      if (!u || !u.active || u.role !== "member") fail("NOT_FOUND", "El código y el teléfono no coinciden con ninguna tarjeta.");
+      if (u.passwordHash) fail("CONFLICT", "Esa tarjeta ya tiene cuenta. Entra con tu correo o teléfono y tu contraseña.");
+      const [taken] = await db.select({ id: users.id }).from(users).where(and(eq(users.email, input.email), ne(users.id, u.id)));
+      if (taken) fail("CONFLICT", "Ese correo ya está registrado.");
+      await db.update(users).set({ passwordHash: await hashPassword(input.password), email: input.email }).where(eq(users.id, u.id));
+      await startLogin(ctx.res, u.id);
+      return { ok: true };
+    }),
 
   logout: publicProcedure.mutation(({ ctx }) => {
     endLogin(ctx.res);

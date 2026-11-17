@@ -657,6 +657,47 @@ function Day() {
   );
 }
 
+// ---------- Entrada del personal ----------
+function StaffLogin() {
+  const utils = trpc.useUtils();
+  const [form, setForm] = useState({ user: "", password: "" });
+  const login = trpc.auth.login.useMutation({ onSuccess: () => utils.invalidate() });
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    login.mutate({ identifier: form.user, password: form.password, area: "staff" });
+  };
+  return (
+    <div className="staff-auth">
+      <Panel title="Acceso del personal">
+        <p className="panel__lead">Para cajeros y administradores de Arena Panter.</p>
+        <form className="form" onSubmit={submit}>
+          <Field label="Teléfono o correo">
+            <input
+              value={form.user}
+              onChange={(e) => setForm((f) => ({ ...f, user: e.target.value }))}
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              required
+            />
+          </Field>
+          <Field label="Contraseña">
+            <input value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} type="password" autoComplete="current-password" required />
+          </Field>
+          <Notice>{login.error?.message}</Notice>
+          <button className="btn" type="submit" disabled={login.isPending}>
+            Entrar al panel
+          </button>
+        </form>
+        <p className="auth__other">
+          ¿Eres cliente? <Link to="/cuenta">Entra a tu cuenta</Link>.
+        </p>
+      </Panel>
+    </div>
+  );
+}
+
 // ---------- Panel ----------
 type Tab = "clientes" | "estaciones" | "cierre" | "ajustes";
 
@@ -667,13 +708,31 @@ export default function Staff() {
   const [tab, setTab] = useState<Tab>("clientes");
 
   if (me.isLoading) return <Shell title="Caja">{<p className="empty">Cargando…</p>}</Shell>;
-  if (!me.data || me.data.role === "member") {
+  if (!me.data) {
     return (
-      <Shell title="Caja">
-        <p className="empty empty--big">
-          Esta sección es solo para el personal de la arena.{" "}
-          <Link to="/cuenta">{me.data ? "Volver a mi cuenta" : "Inicia sesión con tu usuario de caja"}</Link>.
-        </p>
+      <Shell title="Personal">
+        <StaffLogin />
+      </Shell>
+    );
+  }
+  if (me.data.role === "member") {
+    return (
+      <Shell title="Personal">
+        <div className="staff-auth">
+          <Panel title="Entraste como cliente">
+            <p className="panel__lead">
+              Esta sección es solo para el personal de la arena y la sesión abierta es la de {me.data.name}, una cuenta de cliente.
+            </p>
+            <div className="staff-auth__actions">
+              <Link className="btn" to="/cuenta">
+                Ir a mi cuenta
+              </Link>
+              <button className="btn btn--ghost" type="button" disabled={logout.isPending} onClick={() => logout.mutate()}>
+                Salir y entrar como personal
+              </button>
+            </div>
+          </Panel>
+        </div>
       </Shell>
     );
   }
