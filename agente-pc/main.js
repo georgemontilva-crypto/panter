@@ -60,27 +60,43 @@ const IS_WINDOWS = process.platform === "win32";
 let guard = null;
 let guardLocked = false;
 let policiesOn = null;
+// "activo", o el motivo por el que las teclas del sistema no están protegidas.
+let guardStatus = IS_WINDOWS ? "sin iniciar" : "no aplica (no es Windows)";
 
 function guardPath() {
   return app.isPackaged ? path.join(process.resourcesPath, "keyblock.exe") : path.join(__dirname, "keyblock.exe");
 }
 
 function startGuard() {
-  if (!IS_WINDOWS || guard || quitting || !fs.existsSync(guardPath())) return;
+  if (!IS_WINDOWS || guard || quitting) return;
+  if (!fs.existsSync(guardPath())) {
+    guardStatus = "falta keyblock.exe (puede haberlo borrado el antivirus)";
+    return;
+  }
   try {
-    const child = spawn(guardPath(), [String(process.pid)], { windowsHide: true, stdio: ["pipe", "ignore", "ignore"] });
-    child.on("error", () => {
+    const child = spawn(guardPath(), [String(process.pid)], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    guardStatus = "iniciando";
+    child.stdout.on("data", (chunk) => {
+      if (String(chunk).includes("ready")) guardStatus = "activo";
+    });
+    child.stderr.on("data", (chunk) => {
+      guardStatus = `error: ${String(chunk).trim().slice(0, 60)}`;
+    });
+    child.on("error", (error) => {
       if (guard === child) guard = null;
+      guardStatus = `no arrancó: ${String(error.code || error.message).slice(0, 60)}`;
     });
     // Si alguien lo cierra, se vuelve a lanzar en el siguiente ciclo (render corre cada segundo).
-    child.on("exit", () => {
+    child.on("exit", (code) => {
       if (guard === child) guard = null;
+      if (!quitting && guardStatus === "activo") guardStatus = `se detuvo (código ${code})`;
     });
     child.stdin.on("error", () => {});
     guard = child;
     child.stdin.write(guardLocked ? "lock\n" : "unlock\n");
-  } catch {
+  } catch (error) {
     guard = null;
+    guardStatus = `no arrancó: ${String(error.message).slice(0, 60)}`;
   }
 }
 
@@ -277,7 +293,7 @@ function currentView() {
   const now = Date.now();
   if (!config) return { phase: "configurar" };
   const online = now - lastOkAt < OFFLINE_AFTER_MS;
-  const base = { station: remote?.station ?? null, online, error: lastError, serverUrl: config.serverUrl };
+  const base = { station: remote?.station ?? null, online, error: lastError, serverUrl: config.serverUrl, version: app.getVersion(), guard: guardStatus };
   const session = remote?.session;
   if (session && now < session.graceEndsAt) {
     return { ...base, phase: now < session.endsAt ? "activa" : "gracia", session };
@@ -334,7 +350,7 @@ async function poll() {
     const response = await fetch(`${config.serverUrl}/api/agent/heartbeat`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${config.token}` },
-      body: JSON.stringify({ version: app.getVersion() }),
+      body: JSON.stringify({ version: IS_WINDOWS && guardLocked && guardStatus !== "activo" ? `${app.getVersion()} sin-teclado` : app.getVersion() }),
       signal: AbortSignal.timeout(8000),
     });
     const data = await response.json();
@@ -432,12 +448,15 @@ if (!app.requestSingleInstanceLock()) {
     // Entre consulta y consulta, el reloj local decide: la PC se bloquea a tiempo aunque no haya internet.
     setInterval(render, 1000);
     // Si otra ventana le quita el foco a la pantalla de bloqueo, lo recupera.
-    setInterval(() => {
-      if (lockWin.isVisible() && !lockWin.isFocused()) {
+    const refocus = () => {
+      if (!quitting && lockWin.isVisible() && !lockWin.isFocused()) {
         lockWin.setAlwaysOnTop(true, "screen-saver");
+        lockWin.moveTop();
         lockWin.focus();
       }
-    }, 700);
+    };
+    setInterval(refocus, 250);
+    lockWin.on("blur", () => setTimeout(refocus, 30));
   });
   app.on("window-all-closed", () => {});
   app.on("before-quit", (event) => {

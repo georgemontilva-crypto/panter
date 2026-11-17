@@ -43,6 +43,12 @@ jobs:
           exit 0
       - name: Compilar el instalador
         run: npx electron-builder --win nsis --x64 --publish never
+      - name: Comprobar que el guardia de teclado va dentro del instalador
+        shell: pwsh
+        run: |
+          $ruta = "dist\win-unpacked\resources\keyblock.exe"
+          if (-not (Test-Path $ruta)) { Write-Error "keyblock.exe no quedó empaquetado en $ruta"; exit 1 }
+          Write-Host "keyblock.exe empaquetado: $((Get-Item $ruta).Length) bytes"
       - name: Publicar en Releases
         shell: bash
         env:

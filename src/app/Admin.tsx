@@ -223,7 +223,16 @@ function StationsAdmin() {
                 <tr key={s.id}>
                   <td>{s.label}</td>
                   <td>{STATE_LABEL[s.state]}</td>
-                  <td>{s.kind !== "pc" ? "No aplica" : !s.hasAgent ? "Sin credencial" : s.online ? `Conectado${s.agentVersion ? ` (v${s.agentVersion})` : ""}` : "Sin conexión"}</td>
+                  <td>
+                    {s.kind !== "pc"
+                      ? "No aplica"
+                      : !s.hasAgent
+                        ? "Sin credencial"
+                        : !s.online
+                          ? "Sin conexión"
+                          : `Conectado${s.agentVersion ? ` (v${s.agentVersion.replace(" sin-teclado", "")})` : ""}`}
+                    {s.online && s.agentVersion?.includes("sin-teclado") && <strong className="warn"> Teclado sin proteger</strong>}
+                  </td>
                   <td className="actions">
                     {s.kind === "pc" && (
                       <>

@@ -92,6 +92,22 @@ Lo que **ningún programa puede impedir**:
 
 La única salida es el botón **Mantenimiento** con la clave del personal.
 
+### Cómo saber si el teclado está protegido
+
+Abajo en la pantalla de bloqueo hay una línea para el personal: `Panter Bloqueo 0.2.2, teclado protegido`.
+Si dice `teclado SIN proteger`, entre paréntesis sale el motivo. El más común es que el antivirus haya
+borrado `keyblock.exe`: agrégalo a las exclusiones de Seguridad de Windows y reinstala el programa.
+El panel de la web (Caja → Ajustes → Estaciones) también avisa "Teclado sin proteger" en esa PC.
+
+Si aun así quieres anular la tecla Windows por completo en una PC (también mientras juegan), abre
+PowerShell **como administrador**, pega esto y reinicia:
+
+```powershell
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Keyboard Layout" /v "Scancode Map" /t REG_BINARY /d 00000000000000000300000000005BE000005CE000000000 /f
+```
+
+Para devolverla: `reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Keyboard Layout" /v "Scancode Map" /f` y reinicia.
+
 ### Recomendado en cada PC
 
 1. Que los clientes usen una **cuenta de Windows estándar** (sin permisos de administrador) que inicie sesión sola. Así no pueden desinstalar el programa ni abrir herramientas de administrador.
@@ -121,6 +137,6 @@ reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v
 
 ## Estado de esta versión
 
-Es la versión 0.2.1. La lógica (bloqueo, contador, tiempo extra, corte de internet, reconexión) está probada contra el servidor
+Es la versión 0.2.2. La lógica (bloqueo, contador, tiempo extra, corte de internet, reconexión) está probada contra el servidor
 en un entorno de pruebas con Linux. El bloqueo de teclas y las políticas de Windows solo existen en Windows y no se pudieron probar ahí. **Falta probarla en una PC real con Windows** antes de instalarla en toda la arena:
 empieza por una sola máquina.

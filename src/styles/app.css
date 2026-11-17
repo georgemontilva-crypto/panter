@@ -804,6 +804,9 @@
   border-left-color: var(--violet);
 }
 
+.warn {
+  color: var(--gold);
+}
 .token {
   display: grid;
   gap: 10px;

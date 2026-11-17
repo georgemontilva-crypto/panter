@@ -116,7 +116,10 @@
           $("site").textContent = `${(view.serverUrl || "").replace(/^https?:\/\//, "")}/cuenta`;
           if (view.qr) $("qr").src = view.qr;
         }
-        $("foot").textContent = view.phase === "sin_conexion" && view.error ? `Detalle para el personal: ${view.error}` : "";
+        // Línea para el personal: versión y si las teclas del sistema están protegidas.
+        const guard = view.guard === "activo" ? "teclado protegido" : `teclado SIN proteger (${view.guard})`;
+        const detail = view.phase === "sin_conexion" && view.error ? `. Conexión: ${view.error}` : "";
+        $("foot").textContent = `Panter Bloqueo ${view.version}, ${guard}${detail}`;
       }
 
       window.panter.onView((next) => { view = next; paint(); });
