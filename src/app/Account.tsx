@@ -292,15 +292,11 @@ function Wallet({ home }: { home: MemberHome }) {
         <ActiveSession key={s.id} home={home} session={s} />
       ))}
       <div className="wallet__top">
-        <MemberCard name={home.name} code={home.memberCode} qr={home.cardQr} level={current.name} />
+        <div className="wallet__card">
+          <MemberCard name={home.name} code={home.memberCode} qr={home.cardQr} level={current.name} balanceCents={home.balanceCents} />
+          <p className="wallet__hint">Para recargar, muestra este QR en caja.</p>
+        </div>
         <div className="wallet__side">
-          <Panel className="balance">
-            <p className="balance__label">Saldo</p>
-            <p className="balance__value">
-              {ref(home.balanceCents).replace(" REF", "")} <span>REF</span>
-            </p>
-            <p className="balance__hint">Para recargar, muestra tu QR en caja.</p>
-          </Panel>
           <Panel className="loyalty">
             <p className="loyalty__count">
               <strong>{home.visitsCount}</strong> {home.visitsCount === 1 ? "visita" : "visitas"}

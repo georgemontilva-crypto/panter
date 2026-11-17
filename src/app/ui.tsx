@@ -71,12 +71,33 @@ export function Qr({ value, className }: { value: string; className?: string }) 
 }
 
 // ---------- Tarjeta de afiliación ----------
-export function MemberCard({ name, code, qr, level }: { name: string; code: string; qr: string; level?: string }) {
+export function MemberCard({
+  name,
+  code,
+  qr,
+  level,
+  balanceCents,
+}: {
+  name: string;
+  code: string;
+  qr: string;
+  level?: string;
+  /** Saldo actual. Solo en la tarjeta digital: la tarjeta impresa no lo lleva porque cambia. */
+  balanceCents?: number;
+}) {
   return (
     <div className="mcard">
       <div className="mcard__brand">
         <PantherMark className="mcard__mark" />
         <Wordmark className="mcard__word" />
+        {balanceCents !== undefined && (
+          <p className="mcard__balance">
+            <span className="mcard__balance-label">Saldo</span>
+            <span className="mcard__balance-value">
+              {money(balanceCents)} <small>REF</small>
+            </span>
+          </p>
+        )}
       </div>
       <div className="mcard__who">
         {level && <span className="mcard__level">Nivel {level}</span>}

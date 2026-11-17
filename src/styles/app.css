@@ -421,7 +421,7 @@
 .mcard__brand {
   grid-column: 1 / -1;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 3%;
 }
 .mcard__mark {
@@ -432,6 +432,39 @@
 .mcard__word {
   width: 30%;
   height: auto;
+}
+.mcard__balance {
+  display: grid;
+  margin: 0 0 0 auto;
+  text-align: right;
+  line-height: 1;
+}
+.mcard__balance-label {
+  font-stretch: 75%;
+  font-size: 3.4cqw;
+  color: #ffd2c9;
+}
+.mcard__balance-value {
+  font-stretch: 50%;
+  font-weight: 900;
+  font-size: 11cqw;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.mcard__balance-value small {
+  font-stretch: 62.5%;
+  font-weight: 700;
+  font-size: 0.36em;
+  color: var(--red-hot);
+}
+.wallet__card {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+.wallet__hint {
+  color: var(--ash);
+  font-size: 0.875rem;
 }
 .mcard__who {
   display: grid;
@@ -480,28 +513,6 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 18px;
-}
-.balance__label {
-  color: var(--ash);
-  font-size: 0.9375rem;
-}
-.balance__value {
-  font-stretch: 50%;
-  font-weight: 900;
-  font-size: clamp(3.5rem, 9vw, 5.5rem);
-  line-height: 0.95;
-  font-variant-numeric: tabular-nums;
-}
-.balance__value span {
-  font-stretch: 62.5%;
-  font-size: 0.34em;
-  font-weight: 700;
-  color: var(--red);
-}
-.balance__hint {
-  margin-top: 6px;
-  color: var(--ash);
-  font-size: 0.875rem;
 }
 .loyalty__count strong {
   font-stretch: 62.5%;
