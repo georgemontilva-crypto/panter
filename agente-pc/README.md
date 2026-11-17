@@ -14,17 +14,21 @@ cuando se acaba el tiempo.
 | Mantenimiento | Escritorio libre para el personal (se activa desde Caja → Ajustes) |
 | Sin conexión | Si había una sesión, sigue contando y bloquea a su hora. Si no, queda bloqueada |
 
-## Crear el instalador (se hace una sola vez, en una PC con Windows)
+## Descargar el instalador
 
-Necesitas Node.js 20 o más nuevo. En PowerShell, dentro de la carpeta del repo:
+Cada cambio en esta carpeta se compila solo en GitHub y queda publicado en
+[Releases](https://github.com/georgemontilva-crypto/panter/releases). Descarga el archivo
+`Panter-Bloqueo-Setup-X.Y.Z.exe` más reciente y ábrelo en la PC.
+
+Windows avisa que no reconoce el programa porque no está firmado: pulsa **Más información → Ejecutar de todas formas**.
+
+Para compilarlo tú mismo (opcional), con Node.js 20 o más nuevo, en PowerShell dentro del repo:
 
 ```powershell
 cd agente-pc
 npm install
 npm run dist
 ```
-
-El instalador queda en `agente-pc\dist\Panter Bloqueo Setup 0.1.0.exe`. Cópialo a un pendrive.
 
 Para probarlo sin instalar:
 
@@ -37,17 +41,20 @@ npm start
 ## Instalar en cada PC
 
 1. En la web: **Caja → Ajustes → Estaciones**. Crea la PC con su número y pulsa **Generar credencial**. Copia el texto que empieza por `pc_`.
-2. En la PC, ejecuta el instalador. Al abrirse por primera vez pide tres datos:
+2. En la PC, ejecuta el instalador. Se abre una ventana normal (se puede minimizar, mover y cerrar) que pide tres datos:
    - **Dirección de la web:** por ejemplo `https://tu-dominio.com`
    - **Credencial de la PC:** la que copiaste (una distinta por máquina)
    - **Clave de mantenimiento:** la que usará el personal para cerrar el programa
-3. Pulsa **Conectar**. La PC muestra su número y queda bloqueada. Desde ese momento el programa arranca solo al iniciar sesión en Windows.
+3. Pulsa **Conectar**. Desde ese momento la PC queda bloqueada a pantalla completa mostrando su número, y el programa arranca solo al iniciar sesión en Windows.
+
+Mientras la PC no esté conectada, el programa no bloquea nada: si cierras esa ventana, el programa se cierra.
 
 ## Mantenimiento
 
 - **Desbloquear una PC sin cobrar** (instalar juegos, actualizar): Caja → Ajustes → Estaciones → *Desbloquear 30 min*.
-- **Cerrar el programa en la PC:** en la pantalla de bloqueo pulsa `Ctrl + Mayús + M` y escribe la clave de mantenimiento.
-- **Cambiar la credencial o la dirección:** `Ctrl + Mayús + M` → *Volver a configurar*.
+- **Cerrar el programa en la PC:** en la pantalla de bloqueo pulsa el botón **Mantenimiento** (abajo a la derecha) o `Ctrl + Mayús + M`, y escribe la clave de mantenimiento.
+- **Cambiar la credencial o la dirección:** **Mantenimiento** → *Volver a configurar*.
+- **Desinstalar:** Configuración de Windows → Aplicaciones → Panter Bloqueo → Desinstalar.
 
 ## Para que el bloqueo sea difícil de saltar
 
@@ -64,6 +71,6 @@ Un programa normal no puede bloquear `Ctrl + Alt + Supr` ni la tecla Windows: es
 
 ## Estado de esta versión
 
-Es la versión 0.1. La lógica (bloqueo, contador, tiempo extra, corte de internet, reconexión) está probada contra el servidor
+Es la versión 0.1.1. La lógica (bloqueo, contador, tiempo extra, corte de internet, reconexión) está probada contra el servidor
 en un entorno de pruebas con Linux. **Falta probarla en una PC real con Windows** antes de instalarla en toda la arena:
 empieza por una sola máquina.

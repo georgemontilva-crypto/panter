@@ -24,23 +24,26 @@
       .qr { width: 26vh; height: 26vh; padding: 1vh; background: #fff; }
       .qr__label { margin-top: 1vh; font-size: 1.9vh; color: #c9b8b4; text-align: center; }
       .foot { position: fixed; bottom: 2.4vh; left: 0; right: 0; font-size: 1.7vh; color: #7d6d6a; text-align: center; }
-      form { display: grid; gap: 1.6vh; width: min(92vw, 560px); padding: 3.4vh; text-align: left; background: #12060a; border: 1px solid rgba(255, 43, 28, 0.4); user-select: text; }
-      form h1 { font-size: 3.4vh; text-transform: uppercase; }
-      form p { font-size: 1.9vh; color: #c9b8b4; }
-      label { display: grid; gap: 0.6vh; font-size: 1.8vh; font-weight: 600; }
-      input { padding: 1.3vh 1.2vh; font: inherit; font-size: 2vh; color: #f6eeea; background: #050203; border: 1px solid rgba(246, 238, 234, 0.3); }
+      form { display: grid; gap: 14px; width: min(92vw, 560px); padding: 28px; text-align: left; background: #12060a; border: 1px solid rgba(255, 43, 28, 0.4); user-select: text; }
+      form h1 { font-size: 26px; text-transform: uppercase; }
+      form p { font-size: 15px; line-height: 1.45; color: #c9b8b4; }
+      label { display: grid; gap: 6px; font-size: 14px; font-weight: 600; }
+      input { padding: 11px 12px; font: inherit; font-size: 16px; color: #f6eeea; background: #050203; border: 1px solid rgba(246, 238, 234, 0.3); }
       input:focus-visible { outline: 2px solid #ff2b1c; }
-      button { padding: 1.5vh 2vh; font: inherit; font-size: 2vh; font-weight: 700; color: #000; background: #ff2b1c; border: 0; cursor: pointer; }
+      button { padding: 13px 18px; font: inherit; font-size: 16px; font-weight: 700; color: #000; background: #ff2b1c; border: 0; cursor: pointer; }
       button.ghost { color: #f6eeea; background: rgba(246, 238, 234, 0.12); }
-      .row { display: flex; gap: 1vh; flex-wrap: wrap; }
-      .error { font-size: 1.9vh; color: #ff8a7a; min-height: 1.2em; }
+      button:focus-visible { outline: 2px solid #f6eeea; outline-offset: 2px; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; }
+      .error { font-size: 15px; color: #ff8a7a; min-height: 1.3em; }
+      .staff { position: fixed; right: 20px; bottom: 16px; padding: 8px 14px; font-size: 13px; font-weight: 600; color: #b8a7a3; background: rgba(246, 238, 234, 0.08); }
+      .staff:hover { color: #f6eeea; background: rgba(246, 238, 234, 0.16); }
     </style>
   </head>
   <body>
     <!-- Primera vez: conectar esta PC con el servidor -->
     <form id="setup" hidden>
       <h1>Conectar esta PC</h1>
-      <p>En el panel de la web: Caja, Ajustes, Estaciones. Genera la credencial de esta PC y pégala aquí.</p>
+      <p>En el panel de la web: Caja, Ajustes, Estaciones. Genera la credencial de esta PC y pégala aquí. Puedes minimizar esta ventana mientras la copias.</p>
       <label>Dirección de la web <input id="serverUrl" placeholder="https://tu-dominio.com" required /></label>
       <label>Credencial de la PC <input id="token" placeholder="pc_..." required /></label>
       <label>Clave de mantenimiento (para cerrar este programa) <input id="pin" type="password" required /></label>
@@ -83,6 +86,8 @@
     </form>
 
     <p class="foot" id="foot"></p>
+    <!-- Salida para el personal: pide la clave de mantenimiento -->
+    <button type="button" class="staff" id="staffBtn" hidden>Mantenimiento</button>
 
     <script>
       const $ = (id) => document.getElementById(id);
@@ -100,6 +105,7 @@
         $("setup").hidden = !setup || maintOpen;
         $("maint").hidden = !maintOpen;
         $("locked").hidden = setup || maintOpen;
+        $("staffBtn").hidden = setup || maintOpen;
         if (setup) return;
         $("station").textContent = view.station ? view.station.label : "PC";
         const showCode = view.phase === "bloqueada" && view.pairCode;
@@ -123,10 +129,13 @@
         $("setupError").textContent = result.ok ? "" : result.error;
       });
 
+      function openMaint() {
+        if (view.phase === "configurar") return;
+        maintOpen = true; $("maintError").textContent = ""; $("maintPin").value = ""; paint(); $("maintPin").focus();
+      }
+      $("staffBtn").addEventListener("click", openMaint);
       document.addEventListener("keydown", (event) => {
-        if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "m" && view.phase !== "configurar") {
-          maintOpen = true; $("maintError").textContent = ""; $("maintPin").value = ""; paint(); $("maintPin").focus();
-        }
+        if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "m") openMaint();
         if (event.key === "Escape" && maintOpen) { maintOpen = false; paint(); }
       });
       $("maintCancel").addEventListener("click", () => { maintOpen = false; paint(); });

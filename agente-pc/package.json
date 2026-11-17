@@ -1,7 +1,7 @@
 {
   "name": "panter-bloqueo",
   "productName": "Panter Bloqueo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Programa de bloqueo de las PC de Arena Panter",
   "author": "Arena Panter",
   "private": true,

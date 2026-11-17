@@ -22,6 +22,7 @@ const sha = (text) => crypto.createHash("sha256").update(String(text)).digest("h
 let config = null; // { serverUrl, token, pinHash }
 let lockWin = null;
 let overlayWin = null;
+let setupWin = null;
 let quitting = false;
 
 // Lo último que dijo el servidor, con las horas ya convertidas al reloj de esta PC.
@@ -51,11 +52,8 @@ function createLockWindow() {
   lockWin = new BrowserWindow({
     show: false,
     frame: false,
-    fullscreen: true,
-    kiosk: true,
     alwaysOnTop: true,
     skipTaskbar: true,
-    resizable: false,
     minimizable: false,
     closable: false,
     backgroundColor: "#000000",
@@ -71,6 +69,30 @@ function createLockWindow() {
   lockWin.webContents.on("before-input-event", (event, input) => {
     const combo = (input.control || input.alt || input.meta) && input.type === "keyDown";
     if (combo && ["r", "w", "i", "f4", "tab"].includes(input.key.toLowerCase())) event.preventDefault();
+  });
+}
+
+// Mientras la PC no esté conectada no hay nada que bloquear: la configuración se hace en una
+// ventana normal, con barra de título, que se puede minimizar, mover y cerrar.
+function createSetupWindow() {
+  setupWin = new BrowserWindow({
+    width: 620,
+    height: 660,
+    resizable: false,
+    maximizable: false,
+    autoHideMenuBar: true,
+    backgroundColor: "#000000",
+    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
+  });
+  setupWin.setMenu(null);
+  setupWin.loadFile(path.join(__dirname, "lock.html"));
+  setupWin.on("closed", () => {
+    setupWin = null;
+    // Cerrar la ventana sin haber conectado la PC cierra el programa.
+    if (!config) {
+      quitting = true;
+      app.quit();
+    }
   });
 }
 
@@ -107,17 +129,28 @@ function placeOverlay(big) {
 
 function showLock() {
   if (!lockWin.isVisible()) lockWin.show();
-  lockWin.setKiosk(true);
+  // Primero se ajusta al tamaño exacto de la pantalla y después se pasa a modo quiosco:
+  // así cubre todo aunque el modo quiosco de Windows no llegue a aplicarse.
+  const target = screen.getPrimaryDisplay().bounds;
+  const now = lockWin.getBounds();
+  if (now.x !== target.x || now.y !== target.y || now.width !== target.width || now.height !== target.height) {
+    if (lockWin.isKiosk()) lockWin.setKiosk(false);
+    lockWin.setBounds(target);
+  }
+  if (!lockWin.isKiosk()) lockWin.setKiosk(true);
   lockWin.setAlwaysOnTop(true, "screen-saver");
   if (!lockWin.isFocused()) lockWin.focus();
   if (overlayWin.isVisible()) overlayWin.hide();
 }
 
+function hideLock() {
+  if (!lockWin.isVisible()) return;
+  lockWin.setKiosk(false);
+  lockWin.hide();
+}
+
 function showDesktop(big) {
-  if (lockWin.isVisible()) {
-    lockWin.setKiosk(false);
-    lockWin.hide();
-  }
+  hideLock();
   placeOverlay(big);
   if (!overlayWin.isVisible()) overlayWin.showInactive();
 }
@@ -142,8 +175,15 @@ function currentView() {
 function render() {
   const view = currentView();
   const unlocked = view.phase === "activa" || view.phase === "gracia" || view.phase === "mantenimiento";
-  if (unlocked) showDesktop(view.phase === "gracia");
-  else showLock();
+  if (view.phase === "configurar") {
+    hideLock();
+    if (overlayWin.isVisible()) overlayWin.hide();
+    if (!setupWin) createSetupWindow();
+  } else {
+    if (setupWin) setupWin.destroy();
+    if (unlocked) showDesktop(view.phase === "gracia");
+    else showLock();
+  }
 
   if (view.phase !== lastPhase) {
     // Aviso sonoro al entrar al tiempo extra y al bloquearse.
@@ -153,8 +193,9 @@ function render() {
   const payload = JSON.stringify(view);
   if (payload !== lastSent) {
     lastSent = payload;
-    lockWin.webContents.send("view", view);
-    overlayWin.webContents.send("view", view);
+    for (const win of [lockWin, overlayWin, setupWin]) {
+      if (win && !win.isDestroyed()) win.webContents.send("view", view);
+    }
   }
 }
 
@@ -214,7 +255,8 @@ ipcMain.handle("setup", async (_event, input) => {
     if (!response.ok) return { ok: false, error: data.error || "El servidor rechazó la credencial." };
     saveConfig({ serverUrl, token, pinHash: sha(pin) });
     app.setLoginItemSettings({ openAtLogin: true });
-    await poll();
+    // La ventana de configuración se cierra al pasar al bloqueo: primero se responde y luego se cambia.
+    setTimeout(poll, 150);
     return { ok: true, label: data.station.label };
   } catch {
     return { ok: false, error: "No se pudo conectar con esa dirección. Revisa el internet y que esté bien escrita." };
