@@ -29,6 +29,7 @@ let quitting = false;
 // Lo último que dijo el servidor, con las horas ya convertidas al reloj de esta PC.
 let remote = null; // { state, station, pairCode, session: { memberName, endsAt, graceEndsAt }, unlockUntil }
 let lastOkAt = 0;
+const bootAt = Date.now();
 let lastError = "";
 let lastSent = "";
 let lastPhase = "";
@@ -283,7 +284,12 @@ function currentView() {
   }
   if (online && remote?.state === "mantenimiento") return { ...base, phase: "mantenimiento", unlockUntil: remote.unlockUntil };
   if (online && remote?.state === "deshabilitada") return { ...base, phase: "deshabilitada" };
-  if (!online) return { ...base, phase: "sin_conexion" };
+  if (!online) {
+    // Recién encendida: se bloquea de inmediato y, mientras llega la primera respuesta del servidor,
+    // la pantalla dice que está preparando el código en vez de "sin conexión".
+    if (lastOkAt === 0 && now - bootAt < 20_000) return { ...base, phase: "bloqueada", pairCode: null, qr: null };
+    return { ...base, phase: "sin_conexion" };
+  }
   return { ...base, phase: "bloqueada", pairCode: remote?.pairCode ?? null, qr: remote?.qr ?? null };
 }
 
@@ -415,6 +421,9 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.whenReady().then(() => {
     loadConfig();
+    // Una PC ya conectada arranca este programa sola al iniciar sesión en Windows.
+    // Se reafirma en cada arranque por si alguien lo quitó de los programas de inicio.
+    if (config && app.isPackaged) app.setLoginItemSettings({ openAtLogin: true });
     createLockWindow();
     createOverlayWindow();
     lockWin.once("ready-to-show", () => render());

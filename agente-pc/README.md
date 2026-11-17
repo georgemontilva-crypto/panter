@@ -52,6 +52,22 @@ npm start
 
 Mientras la PC no esté conectada, el programa no bloquea nada: si cierras esa ventana, el programa se cierra.
 
+## Que la PC encienda ya bloqueada
+
+El programa arranca solo cuando se inicia sesión en Windows y bloquea de inmediato. Para que eso pase
+apenas se enciende la PC, sin que nadie escriba una contraseña, activa el inicio de sesión automático
+de la cuenta de los clientes:
+
+1. Pulsa `Windows + R`, escribe `netplwiz` y pulsa Enter.
+2. Elige la cuenta que usan los clientes.
+3. Desmarca **Los usuarios deben escribir su nombre y contraseña para usar el equipo** y pulsa **Aceptar**.
+4. Escribe la contraseña de esa cuenta dos veces (déjala vacía si no tiene) y pulsa **Aceptar**.
+
+Si esa casilla no aparece: Configuración → Cuentas → Opciones de inicio de sesión → apaga
+**Permitir solo el inicio de sesión de Windows Hello para cuentas de Microsoft** y vuelve a abrir `netplwiz`.
+
+Al reiniciar, Windows entra solo a esa cuenta y en pocos segundos aparece la pantalla de bloqueo.
+
 ## Mantenimiento
 
 - **Desbloquear una PC sin cobrar** (instalar juegos, actualizar): Caja → Ajustes → Estaciones → *Desbloquear 30 min*.
@@ -105,6 +121,6 @@ reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v
 
 ## Estado de esta versión
 
-Es la versión 0.2.0. La lógica (bloqueo, contador, tiempo extra, corte de internet, reconexión) está probada contra el servidor
+Es la versión 0.2.1. La lógica (bloqueo, contador, tiempo extra, corte de internet, reconexión) está probada contra el servidor
 en un entorno de pruebas con Linux. El bloqueo de teclas y las políticas de Windows solo existen en Windows y no se pudieron probar ahí. **Falta probarla en una PC real con Windows** antes de instalarla en toda la arena:
 empieza por una sola máquina.
