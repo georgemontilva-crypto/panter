@@ -32,44 +32,49 @@ export default function Nav() {
   }, [menuOpen]);
 
   return (
-    <header className={`nav${scrolled ? " nav--solid" : ""}${menuOpen ? " nav--open" : ""}`}>
-      <a className="nav__brand" href="#inicio" aria-label="Arena Panter, ir al inicio">
-        <PantherMark className="nav__mark" />
-        <Wordmark className="nav__wordmark" />
-      </a>
-
-      <nav className="nav__links" aria-label="Secciones">
-        {links.map((l) => (
-          <a key={l.href} href={l.href}>
-            {l.label}
-          </a>
-        ))}
-      </nav>
-
-      <div className="nav__side">
-        <a className={`status${status.open ? " status--open" : ""}`} href="#horario">
-          <span className="status__dot" aria-hidden="true" />
-          <span>
-            {status.headline}
-            <span className="status__detail">. {status.detail}</span>
-          </span>
+    <>
+      <header className={`nav${scrolled ? " nav--solid" : ""}${menuOpen ? " nav--open" : ""}`}>
+        <a className="nav__brand" href="#inicio" aria-label="Arena Panter, ir al inicio">
+          <PantherMark className="nav__mark" />
+          <Wordmark className="nav__wordmark" />
         </a>
-        <Link className="btn btn--small" to="/cuenta">
-          Mi cuenta
-        </Link>
-        <button
-          className="nav__toggle"
-          type="button"
-          aria-expanded={menuOpen}
-          aria-controls="menu-movil"
-          onClick={() => setMenuOpen((v) => !v)}
-        >
-          <span className="sr-only">{menuOpen ? "Cerrar menú" : "Abrir menú"}</span>
-          <span aria-hidden="true" />
-          <span aria-hidden="true" />
-        </button>
-      </div>
 
+        <nav className="nav__links" aria-label="Secciones">
+          {links.map((l) => (
+            <a key={l.href} href={l.href}>
+              {l.label}
+            </a>
+          ))}
+        </nav>
+
+        <div className="nav__side">
+          <a className={`status${status.open ? " status--open" : ""}`} href="#horario">
+            <span className="status__dot" aria-hidden="true" />
+            <span>
+              {status.headline}
+              <span className="status__detail">. {status.detail}</span>
+            </span>
+          </a>
+          <Link className="btn btn--small" to="/cuenta">
+            Mi cuenta
+          </Link>
+          <button
+            className="nav__toggle"
+            type="button"
+            aria-expanded={menuOpen}
+            aria-controls="menu-movil"
+            onClick={() => setMenuOpen((v) => !v)}
+          >
+            <span className="sr-only">{menuOpen ? "Cerrar menú" : "Abrir menú"}</span>
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+          </button>
+        </div>
+
+      </header>
+
+      {/* Va fuera del <header>: la barra usa desenfoque de fondo y en Safari eso encierra a los
+          elementos fijos que tenga dentro, así que el menú quedaba aplastado en el alto de la barra. */}
       <div className="menu" id="menu-movil" hidden={!menuOpen}>
         <nav aria-label="Secciones (móvil)">
           {links.map((l) => (
@@ -93,6 +98,6 @@ export default function Nav() {
           Escribir por {reserveChannel}
         </a>
       </div>
-    </header>
+    </>
   );
 }

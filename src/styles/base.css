@@ -338,13 +338,21 @@ h3 {
 }
 .menu {
   position: fixed;
-  inset: var(--nav-h) 0 0 0;
+  z-index: 49;
+  top: var(--nav-h);
+  left: 0;
+  right: 0;
+  /* dvh: el alto real visible en el teléfono, descontando las barras del navegador. */
+  height: calc(100vh - var(--nav-h));
+  height: calc(100dvh - var(--nav-h));
   display: grid;
   align-content: start;
-  gap: 28px;
-  padding: 36px var(--pad) 48px;
+  gap: 24px;
+  padding: 28px var(--pad) calc(40px + env(safe-area-inset-bottom));
   background: var(--black);
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 .menu[hidden] {
   display: none;
@@ -356,7 +364,7 @@ h3 {
   padding: 10px 0;
   font-stretch: 50%;
   font-weight: 800;
-  font-size: 3.5rem;
+  font-size: clamp(2.5rem, 13vw, 3.5rem);
   line-height: 1;
   text-transform: uppercase;
   text-decoration: none;
