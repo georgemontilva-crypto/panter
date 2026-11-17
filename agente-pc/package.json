@@ -1,9 +1,9 @@
 {
   "name": "panter-bloqueo",
   "productName": "Panter Bloqueo",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Programa de bloqueo de las PC de Arena Panter",
-  "author": "Arena Panter",
+  "author": "Gammalab Studios",
   "private": true,
   "main": "main.js",
   "scripts": {
@@ -46,6 +46,7 @@
         "from": "keyblock.exe",
         "to": "keyblock.exe"
       }
-    ]
+    ],
+    "copyright": "Copyright © 2026 Gammalab Studios"
   }
 }
