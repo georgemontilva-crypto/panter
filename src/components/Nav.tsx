@@ -23,12 +23,17 @@ export default function Nav() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  // Con el menú abierto la página de fondo no se desplaza. Al cerrarlo, o al salir de la portada
+  // (por ejemplo tocando "Mi cuenta"), el bloqueo se quita siempre.
   useEffect(() => {
-    document.body.classList.toggle("no-scroll", menuOpen);
     if (!menuOpen) return;
+    document.body.classList.add("no-scroll");
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenuOpen(false);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      document.body.classList.remove("no-scroll");
+      window.removeEventListener("keydown", onKey);
+    };
   }, [menuOpen]);
 
   return (
@@ -83,7 +88,7 @@ export default function Nav() {
             </a>
           ))}
         </nav>
-        <Link className="btn" to="/cuenta">
+        <Link className="btn" to="/cuenta" onClick={() => setMenuOpen(false)}>
           Mi cuenta
         </Link>
         <p className="menu__status">
