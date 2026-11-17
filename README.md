@@ -12,8 +12,8 @@ visitas y niveles de fidelidad, panel de caja y control de las PC.
 | --- | --- | --- |
 | `/` | Público | Portada, evento, estaciones, horario |
 | `/cuenta` | Clientes | Registro, tarjeta digital con QR, saldo, visitas, activar una PC |
-| `/caja` | Cajeros y administradores | Clientes, recargas, venta de tarjeta, estaciones, cierre del día |
-| `/caja` → Ajustes | Administradores | Tarifas, reglas, estaciones y credenciales, personal, base de clientes |
+| `/caja` | Cajeros y administradores | Clientes, recargas, cobro del menú con el saldo, venta de tarjeta, estaciones, cierre del día |
+| `/caja` → Ajustes | Administradores | Tarifas, horario, menú del mostrador, estaciones y credenciales, personal, base de clientes |
 | `POST /api/agent/heartbeat` | Programa de bloqueo | Cada PC pregunta su estado con su credencial |
 
 ## Variables de entorno
@@ -60,4 +60,8 @@ npm start            # lo que corre en producción
 - Al activar una estación se cobra el tiempo completo por adelantado. Si la sesión se termina antes, se devuelve
   el tiempo no usado (se puede apagar en Ajustes).
 - Al llegar a cero empiezan los minutos de gracia (5 por defecto) para guardar la partida; luego la PC se bloquea.
-- Una visita = un día con al menos una sesión o un check-in en caja.
+- Una visita = un día con al menos una sesión, una compra o un check-in en caja.
+- **Compras del menú:** el cajero escanea la tarjeta, arma el pedido y se descuenta del saldo. Si no alcanza,
+  no se crea la orden ni se cobra nada. Cada orden guarda sus renglones con el nombre y el precio de ese momento
+  (`orders` y `order_items`) y se puede anular, lo que devuelve el monto al saldo.
+- No se vende tiempo de juego que pase de la hora de cierre (`server/closing.ts`).

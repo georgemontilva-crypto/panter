@@ -301,6 +301,56 @@ function ActivatePc({ home }: { home: MemberHome }) {
   );
 }
 
+// ---------- Menú del mostrador y compras ----------
+function MenuAndOrders({ home }: { home: MemberHome }) {
+  const menu = trpc.member.menu.useQuery(undefined, { staleTime: 60_000 });
+  const items = menu.data ?? [];
+  if (items.length === 0 && home.orders.length === 0) return null;
+  const categories = [...new Set(items.map((p) => p.category))];
+  return (
+    <>
+      {items.length > 0 && (
+        <Panel title="Menú">
+          <p className="panel__lead">Pide en el mostrador y paga con tu tarjeta: muestran tu QR, lo escanean y se descuenta de tu saldo.</p>
+          {categories.map((category) => (
+            <div className="menu-list" key={category}>
+              <h3>{category}</h3>
+              <ul>
+                {items
+                  .filter((p) => p.category === category)
+                  .map((p) => (
+                    <li key={p.id} className={p.priceCents > home.balanceCents ? "is-out" : undefined}>
+                      <span>{p.name}</span>
+                      <span>{ref(p.priceCents)}</span>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          ))}
+        </Panel>
+      )}
+      {home.orders.length > 0 && (
+        <Panel title="Mis compras">
+          <ul className="moves">
+            {home.orders.map((o) => (
+              <li key={o.id}>
+                <span className="moves__what">
+                  Orden #{o.id}
+                  <small>
+                    {when(o.createdAt)}, {o.items.map((i) => (i.qty > 1 ? `${i.qty} x ${i.name}` : i.name)).join(", ")}
+                    {o.status === "refunded" ? " (anulada y devuelta)" : ""}
+                  </small>
+                </span>
+                <span className="moves__amount">{ref(o.totalCents)}</span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
+    </>
+  );
+}
+
 // ---------- Perfil ----------
 function Wallet({ home }: { home: MemberHome }) {
   const { current, next } = home.level;
@@ -338,6 +388,7 @@ function Wallet({ home }: { home: MemberHome }) {
       </div>
 
       {home.sessions.length === 0 && <ActivatePc home={home} />}
+      <MenuAndOrders home={home} />
 
       <Panel title="Movimientos">
         {home.tx.length === 0 ? (

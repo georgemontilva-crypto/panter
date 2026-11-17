@@ -2,11 +2,13 @@ import { and, count, desc, eq, gte, like, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { checkPassword, endLogin, hashPassword, startLogin } from "./auth";
 import { db } from "./db";
-import { PAY_METHODS, STATION_KINDS, sessions, stations, users, visits, walletTx } from "./db/schema";
+import { PAY_METHODS, STATION_KINDS, products, sessions, stations, users, visits, walletTx } from "./db/schema";
 import { QR_PREFIX, caracasDate, caracasDayBounds, clearRateLimit, fail, newDeviceToken, normalizePhone, now, rateLimit, sha256, MINUTE } from "./lib";
 import {
+  activeMenu,
   activeSessionsOf,
   closingInfo,
+  createOrder,
   createUser,
   endSession,
   extendSession,
@@ -14,8 +16,10 @@ import {
   ledger,
   levelFor,
   namesOf,
+  recentOrders,
   recentTx,
   recordVisit,
+  refundOrder,
   saveConfig,
   startSession,
   stationsBoard,
@@ -46,7 +50,7 @@ const publicUser = (u: UserRow) => ({
 
 async function memberDetail(u: UserRow) {
   const config = await getConfig();
-  const [tx, live] = await Promise.all([recentTx(u.id), activeSessionsOf(u.id)]);
+  const [tx, live, purchases] = await Promise.all([recentTx(u.id), activeSessionsOf(u.id), recentOrders({ userId: u.id }, 8)]);
   return {
     ...publicUser(u),
     email: u.email,
@@ -63,6 +67,7 @@ async function memberDetail(u: UserRow) {
     cardPriceCents: config.cardPriceCents,
     createdAt: u.createdAt,
     sessions: live,
+    orders: purchases,
     tx: tx.map((t) => ({
       id: t.id,
       type: t.type,
@@ -135,6 +140,9 @@ const authRouter = router({
 // ---------- Perfil del cliente ----------
 const memberRouter = router({
   home: memberProcedure.query(({ ctx }) => memberDetail(ctx.user)),
+
+  // El menú que se vende en el mostrador, para que el cliente vea precios antes de pedir.
+  menu: memberProcedure.query(async () => (await activeMenu()).map((p) => ({ id: p.id, name: p.name, category: p.category, priceCents: p.priceCents }))),
 
   pcs: memberProcedure.query(async () => {
     const board = await stationsBoard();
@@ -230,6 +238,21 @@ const staffRouter = router({
     return { ok: true };
   }),
 
+  // Cobro en el mostrador: se escanea la tarjeta, se eligen los productos y se descuenta del saldo.
+  sell: staffProcedure
+    .input(
+      z.object({
+        userId: id,
+        items: z
+          .array(z.object({ productId: id, qty: z.number().int().min(1).max(50) }))
+          .min(1, "Agrega al menos un producto al pedido.")
+          .max(40),
+      }),
+    )
+    .mutation(({ ctx, input }) => createOrder({ userId: input.userId, staffId: ctx.user.id, items: input.items })),
+
+  refundOrder: staffProcedure.input(z.object({ orderId: id })).mutation(({ ctx, input }) => refundOrder({ orderId: input.orderId, staffId: ctx.user.id })),
+
   checkin: staffProcedure.input(z.object({ userId: id })).mutation(async ({ input }) => {
     const config = await getConfig();
     const isNew = await userTx(input.userId, (tx) => recordVisit(tx, input.userId, "checkin", config));
@@ -272,7 +295,10 @@ const staffRouter = router({
       day,
       byMethod: byMethod.map((r) => ({ method: r.method, totalCents: Number(r.total), count: r.n })),
       cashInCents: byMethod.reduce((a, r) => a + Number(r.total), 0),
-      playedCents: -(sum("session") + sum("refund")),
+      // Jugado: tiempo cobrado menos las devoluciones de tiempo (las de órdenes van con el menú).
+      playedCents: -sum("session") - moves.filter((m) => m.type === "refund" && !m.orderId).reduce((a, m) => a + m.amountCents, 0),
+      // Vendido del menú: compras menos las órdenes anuladas ese día.
+      menuCents: -sum("purchase") - moves.filter((m) => m.type === "refund" && m.orderId).reduce((a, m) => a + m.amountCents, 0),
       cardsSold: moves.filter((m) => m.type === "card_sale").length,
       sessions: sessionCount.n,
       visits: visitCount.n,
@@ -313,6 +339,28 @@ const adminRouter = router({
     await saveConfig(input);
     return { ok: true };
   }),
+
+  products: adminProcedure.query(() => db.select().from(products).orderBy(products.category, products.name)),
+
+  productSave: adminProcedure
+    .input(
+      z.object({
+        id: id.optional(),
+        name: z.string().trim().min(2, "Escribe el nombre del producto.").max(80),
+        category: z.string().trim().min(1, "Escribe la categoría (por ejemplo, Bebidas).").max(40),
+        priceCents: cents.min(1, "El precio debe ser mayor que cero.").max(100_000),
+        active: z.boolean(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const { id: productId, ...values } = input;
+      if (productId) {
+        await db.update(products).set(values).where(eq(products.id, productId));
+        return { id: productId };
+      }
+      const [created] = await db.insert(products).values({ ...values, createdAt: now() });
+      return { id: created.insertId };
+    }),
 
   stationCreate: adminProcedure
     .input(z.object({ kind: z.enum(STATION_KINDS), number: z.number().int().min(1).max(999), note: z.string().trim().max(160).optional() }))

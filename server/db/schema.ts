@@ -6,7 +6,7 @@ const ms = (name: string) => bigint(name, { mode: "number" });
 
 export const STATION_KINDS = ["pc", "ps5", "switch", "sim"] as const;
 export const PAY_METHODS = ["efectivo_usd", "efectivo_bs", "pago_movil", "punto", "zelle", "otro"] as const;
-export const TX_TYPES = ["topup", "card_sale", "session", "refund", "bonus", "adjust"] as const;
+export const TX_TYPES = ["topup", "card_sale", "session", "refund", "bonus", "adjust", "purchase"] as const;
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
@@ -41,6 +41,7 @@ export const walletTx = mysqlTable(
     reference: varchar("reference", { length: 80 }),
     note: varchar("note", { length: 200 }),
     sessionId: int("session_id"),
+    orderId: int("order_id"),
     staffId: int("staff_id"),
     createdAt: ms("created_at").notNull(),
   },
@@ -99,6 +100,45 @@ export const visits = mysqlTable(
     createdAt: ms("created_at").notNull(),
   },
   (t) => [uniqueIndex("visits_user_day").on(t.userId, t.visitDate), index("visits_day").on(t.visitDate)],
+);
+
+// ---------- Menú y compras con el saldo ----------
+export const products = mysqlTable("products", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 80 }).notNull(),
+  category: varchar("category", { length: 40 }).notNull().default("General"),
+  priceCents: int("price_cents").notNull(),
+  active: boolean("active").notNull().default(true),
+  createdAt: ms("created_at").notNull(),
+});
+
+export const orders = mysqlTable(
+  "orders",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    staffId: int("staff_id").notNull(),
+    totalCents: int("total_cents").notNull(),
+    status: mysqlEnum("status", ["paid", "refunded"]).notNull().default("paid"),
+    createdAt: ms("created_at").notNull(),
+    refundedAt: ms("refunded_at"),
+    refundedBy: int("refunded_by"),
+  },
+  (t) => [index("orders_user").on(t.userId, t.createdAt), index("orders_created").on(t.createdAt)],
+);
+
+// Cada renglón guarda el nombre y el precio del momento: si el menú cambia, la orden no.
+export const orderItems = mysqlTable(
+  "order_items",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    orderId: int("order_id").notNull(),
+    productId: int("product_id").notNull(),
+    name: varchar("name", { length: 80 }).notNull(),
+    unitCents: int("unit_cents").notNull(),
+    qty: int("qty").notNull(),
+  },
+  (t) => [index("order_items_order").on(t.orderId)],
 );
 
 export const settings = mysqlTable("settings", {

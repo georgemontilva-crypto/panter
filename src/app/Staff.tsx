@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { KIND_NAMES, METHODS, TX_LABEL, methodLabel, trpc, type BoardStation, type MethodId, type StationKind } from "./api";
+import { KIND_NAMES, METHODS, TX_LABEL, methodLabel, trpc, type BoardStation, type MethodId, type OrderRow, type StationKind } from "./api";
 import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, clock, countdown, duration, parseMoney, ref, useNowTick, when } from "./ui";
 
 const Admin = lazy(() => import("./Admin"));
@@ -18,6 +18,142 @@ function MethodSelect({ value, onChange }: { value: MethodId; onChange: (m: Meth
         </option>
       ))}
     </select>
+  );
+}
+
+// ---------- Cobrar del menú con el saldo ----------
+function MenuSale({ userId, balanceCents, orders }: { userId: number; balanceCents: number; orders: OrderRow[] }) {
+  const utils = trpc.useUtils();
+  const menu = trpc.member.menu.useQuery(undefined, { staleTime: 30_000 });
+  const [cart, setCart] = useState<Record<number, number>>({});
+  const refresh = { onSuccess: () => utils.staff.invalidate() };
+  const sell = trpc.staff.sell.useMutation({
+    onSuccess: () => {
+      setCart({});
+      return utils.staff.invalidate();
+    },
+  });
+  const refund = trpc.staff.refundOrder.useMutation(refresh);
+
+  const items = menu.data ?? [];
+  const categories = [...new Set(items.map((p) => p.category))];
+  const lines = items.filter((p) => cart[p.id] > 0);
+  const total = lines.reduce((sum, p) => sum + p.priceCents * cart[p.id], 0);
+  const missing = total - balanceCents;
+  const change = (id: number, delta: number) => {
+    sell.reset();
+    setCart((c) => ({ ...c, [id]: Math.max(0, Math.min(50, (c[id] ?? 0) + delta)) }));
+  };
+
+  return (
+    <Panel title="Cobrar del menú" className="sale">
+      {menu.data && items.length === 0 ? (
+        <p className="empty">El menú está vacío. Un administrador agrega los productos en Ajustes.</p>
+      ) : (
+        <>
+          {categories.map((category) => (
+            <div className="sale__group" key={category}>
+              <h3>{category}</h3>
+              <ul className="sale__items">
+                {items
+                  .filter((p) => p.category === category)
+                  .map((p) => {
+                    const qty = cart[p.id] ?? 0;
+                    return (
+                      <li key={p.id} className={qty ? "is-picked" : undefined}>
+                        <button type="button" className="sale__add" onClick={() => change(p.id, 1)} aria-label={`Agregar ${p.name}`}>
+                          <span className="sale__name">{p.name}</span>
+                          <span className="sale__price">{ref(p.priceCents)}</span>
+                        </button>
+                        {qty > 0 && (
+                          <span className="sale__qty">
+                            <button type="button" onClick={() => change(p.id, -1)} aria-label={`Quitar un ${p.name}`}>
+                              −
+                            </button>
+                            <strong aria-label={`${qty} en el pedido`}>{qty}</strong>
+                            <button type="button" onClick={() => change(p.id, 1)} aria-label={`Agregar otro ${p.name}`}>
+                              +
+                            </button>
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+              </ul>
+            </div>
+          ))}
+
+          {lines.length > 0 && (
+            <div className="sale__summary">
+              <ul>
+                {lines.map((p) => (
+                  <li key={p.id}>
+                    <span>
+                      {cart[p.id]} x {p.name}
+                    </span>
+                    <span>{ref(p.priceCents * cart[p.id])}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="sale__total">
+                <span>Total</span>
+                <strong>{ref(total)}</strong>
+              </p>
+              {missing > 0 ? (
+                <Notice>Saldo insuficiente: le faltan {ref(missing)}. Recarga primero o quita algo del pedido.</Notice>
+              ) : (
+                <p className="form__lead">Después de cobrar le quedan {ref(balanceCents - total)}.</p>
+              )}
+            </div>
+          )}
+          <Notice>{sell.error?.message ?? refund.error?.message}</Notice>
+          {sell.isSuccess && lines.length === 0 && (
+            <Notice kind="ok">
+              Orden #{sell.data.orderId} cobrada: {ref(sell.data.totalCents)}. Saldo nuevo: {ref(sell.data.balanceCents)}.
+            </Notice>
+          )}
+          <button
+            className="btn"
+            type="button"
+            disabled={sell.isPending || lines.length === 0 || missing > 0}
+            onClick={() => sell.mutate({ userId, items: lines.map((p) => ({ productId: p.id, qty: cart[p.id] })) })}
+          >
+            {lines.length ? `Cobrar ${ref(total)} del saldo` : "Elige los productos del pedido"}
+          </button>
+        </>
+      )}
+
+      {orders.length > 0 && (
+        <div className="sale__orders">
+          <h3>Últimas órdenes</h3>
+          <ul>
+            {orders.slice(0, 4).map((o) => (
+              <li key={o.id}>
+                <span>
+                  <strong>#{o.id}</strong> {o.items.map((i) => (i.qty > 1 ? `${i.qty} x ${i.name}` : i.name)).join(", ")}
+                  <small>
+                    {when(o.createdAt)}, {ref(o.totalCents)}
+                    {o.status === "refunded" ? ", anulada" : ""}
+                  </small>
+                </span>
+                {o.status === "paid" && (
+                  <button
+                    type="button"
+                    className="app__link"
+                    disabled={refund.isPending}
+                    onClick={() => {
+                      if (window.confirm(`¿Anular la orden #${o.id} y devolver ${ref(o.totalCents)} al saldo?`)) refund.mutate({ orderId: o.id });
+                    }}
+                  >
+                    Anular
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Panel>
   );
 }
 
@@ -102,6 +238,8 @@ function MemberDetail({ id }: { id: number }) {
       ))}
 
       <div className="detail__grid">
+        <MenuSale userId={m.id} balanceCents={m.balanceCents} orders={m.orders} />
+
         <Panel title="Recargar saldo">
           <form className="form" onSubmit={submitTopup}>
             <Field label="Monto en REF">
@@ -441,6 +579,10 @@ function Day() {
               <div>
                 <dt>Clientes nuevos</dt>
                 <dd>{d.newMembers}</dd>
+              </div>
+              <div>
+                <dt>Vendido del menú</dt>
+                <dd>{ref(d.menuCents)}</dd>
               </div>
               <div>
                 <dt>Tarjetas</dt>

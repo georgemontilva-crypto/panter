@@ -39,4 +39,7 @@ export const TX_LABEL: Record<string, string> = {
   refund: "Devolución",
   bonus: "Bono de fidelidad",
   adjust: "Ajuste",
+  purchase: "Compra en el menú",
 };
+export type MenuItem = Out["member"]["menu"][number];
+export type OrderRow = MemberHome["orders"][number];

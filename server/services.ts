@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import { db, type Tx } from "./db";
-import { PAY_METHODS, STATION_KINDS, TX_TYPES, sessions, settings, stations, users, visits, walletTx } from "./db/schema";
+import { PAY_METHODS, STATION_KINDS, TX_TYPES, orderItems, orders, products, sessions, settings, stations, users, visits, walletTx } from "./db/schema";
 import { hours as defaultHours } from "../src/content";
 import { closingAt, closingProblem, sellableMinutes, type WeekHours } from "./closing";
 import { MINUTE, caracasDate, fail, newCardToken, newMemberCode, newPairCode, now } from "./lib";
@@ -158,6 +158,7 @@ export async function ledger(
     reference?: string | null;
     note?: string | null;
     sessionId?: number | null;
+    orderId?: number | null;
     staffId?: number | null;
   },
 ): Promise<number> {
@@ -170,7 +171,7 @@ export async function ledger(
     .where(and(eq(users.id, entry.userId), sql`${users.balanceCents} + ${amount} >= 0`));
   const [user] = await tx.select({ balance: users.balanceCents }).from(users).where(eq(users.id, entry.userId));
   if (!user) fail("NOT_FOUND", "No encontramos a ese cliente.");
-  if (updated.affectedRows === 0) fail("BAD_REQUEST", "Saldo insuficiente. Recarga en caja para seguir jugando.");
+  if (updated.affectedRows === 0) fail("BAD_REQUEST", "Saldo insuficiente. Recarga en caja y vuelve a intentar.");
   const after = user.balance;
   await tx.insert(walletTx).values({
     userId: entry.userId,
@@ -182,6 +183,7 @@ export async function ledger(
     reference: entry.reference || null,
     note: entry.note || null,
     sessionId: entry.sessionId ?? null,
+    orderId: entry.orderId ?? null,
     staffId: entry.staffId ?? null,
     createdAt: now(),
   });
@@ -365,6 +367,92 @@ export async function endSession(input: { sessionId: number; staffId: number | n
     return { refundCents: refund, unusedMinutes };
   });
 }
+
+// ---------- Compras del menú con el saldo ----------
+export async function createOrder(input: { userId: number; staffId: number; items: { productId: number; qty: number }[] }) {
+  const config = await getConfig();
+  const ids = [...new Set(input.items.map((i) => i.productId))];
+  const found = await db.select().from(products).where(inArray(products.id, ids));
+  const byId = new Map(found.map((p) => [p.id, p]));
+  // Mismo producto repetido en el pedido: se suma en un solo renglón.
+  const quantities = new Map<number, number>();
+  for (const item of input.items) quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.qty);
+  const lines = [...quantities].map(([productId, qty]) => {
+    const product = byId.get(productId);
+    if (!product || !product.active) fail("BAD_REQUEST", "Uno de los productos ya no está en el menú. Actualiza la página y arma el pedido de nuevo.");
+    return { productId, name: product.name, unitCents: product.priceCents, qty };
+  });
+  const total = lines.reduce((sum, line) => sum + line.unitCents * line.qty, 0);
+  if (total <= 0) fail("BAD_REQUEST", "El pedido está vacío.");
+  const summary = lines.map((l) => (l.qty > 1 ? `${l.qty} x ${l.name}` : l.name)).join(", ");
+
+  return userTx(input.userId, async (tx) => {
+    const [created] = await tx.insert(orders).values({ userId: input.userId, staffId: input.staffId, totalCents: total, createdAt: now() });
+    const orderId = created.insertId;
+    await tx.insert(orderItems).values(lines.map((line) => ({ ...line, orderId })));
+    // Si el saldo no alcanza, ledger() falla y la transacción entera se deshace: no queda orden ni cobro.
+    const balanceCents = await ledger(tx, {
+      userId: input.userId,
+      type: "purchase",
+      amountCents: -total,
+      orderId,
+      staffId: input.staffId,
+      note: `Orden #${orderId}: ${summary}`.slice(0, 200),
+    });
+    // Comprar en el mostrador también cuenta como la visita del día.
+    const firstVisitToday = await recordVisit(tx, input.userId, "checkin", config);
+    if (!firstVisitToday) return { orderId, totalCents: total, balanceCents };
+    // La visita pudo acreditar un bono de fidelidad: se devuelve el saldo ya con el bono.
+    const [user] = await tx.select({ balance: users.balanceCents }).from(users).where(eq(users.id, input.userId));
+    return { orderId, totalCents: total, balanceCents: user.balance };
+  });
+}
+
+export async function refundOrder(input: { orderId: number; staffId: number }) {
+  const [order] = await db.select().from(orders).where(eq(orders.id, input.orderId));
+  if (!order) fail("NOT_FOUND", "No encontramos esa orden.");
+  return userTx(order.userId, async (tx) => {
+    const [fresh] = await tx.select().from(orders).where(eq(orders.id, order.id)).for("update");
+    if (!fresh || fresh.status !== "paid") fail("CONFLICT", "Esa orden ya estaba anulada.");
+    await tx.update(orders).set({ status: "refunded", refundedAt: now(), refundedBy: input.staffId }).where(eq(orders.id, order.id));
+    const balanceCents = await ledger(tx, {
+      userId: order.userId,
+      type: "refund",
+      amountCents: order.totalCents,
+      orderId: order.id,
+      staffId: input.staffId,
+      note: `Anulación de la orden #${order.id}`,
+    });
+    return { balanceCents };
+  });
+}
+
+/** Últimas órdenes con sus renglones: de un cliente, o de todos si no se indica. */
+export async function recentOrders(filter: { userId?: number; from?: number; to?: number }, limit = 10) {
+  const conditions = [
+    filter.userId ? eq(orders.userId, filter.userId) : undefined,
+    filter.from ? gt(orders.createdAt, filter.from - 1) : undefined,
+    filter.to ? lte(orders.createdAt, filter.to - 1) : undefined,
+  ].filter(Boolean);
+  const rows = await db
+    .select()
+    .from(orders)
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(orders.id))
+    .limit(limit);
+  if (!rows.length) return [];
+  const items = await db.select().from(orderItems).where(inArray(orderItems.orderId, rows.map((r) => r.id)));
+  return rows.map((order) => ({
+    id: order.id,
+    userId: order.userId,
+    totalCents: order.totalCents,
+    status: order.status,
+    createdAt: order.createdAt,
+    items: items.filter((i) => i.orderId === order.id).map((i) => ({ name: i.name, qty: i.qty, unitCents: i.unitCents })),
+  }));
+}
+
+export const activeMenu = () => db.select().from(products).where(eq(products.active, true)).orderBy(products.category, products.name);
 
 // ---------- Estaciones ----------
 const KIND_LABEL: Record<StationKind, string> = { pc: "PC", ps5: "PS5", switch: "Switch", sim: "Simulador" };

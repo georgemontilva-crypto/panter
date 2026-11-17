@@ -264,6 +264,93 @@ function StationsAdmin() {
   );
 }
 
+// ---------- Menú ----------
+function ProductRow({ product }: { product: { id: number; name: string; category: string; priceCents: number; active: boolean } }) {
+  const utils = trpc.useUtils();
+  const save = trpc.admin.productSave.useMutation({ onSuccess: () => Promise.all([utils.admin.products.invalidate(), utils.member.menu.invalidate()]) });
+  const [price, setPrice] = useState(money(product.priceCents));
+  const cents = parseMoney(price);
+  const changed = cents !== null && cents !== product.priceCents;
+  return (
+    <tr className={product.active ? undefined : "is-off"}>
+      <td>{product.name}</td>
+      <td>{product.category}</td>
+      <td>
+        <input className="input--price" value={price} onChange={(e) => setPrice(e.target.value)} inputMode="decimal" aria-label={`Precio de ${product.name} en REF`} />
+      </td>
+      <td className="actions">
+        {changed && (
+          <button type="button" disabled={save.isPending} onClick={() => save.mutate({ ...product, priceCents: cents })}>
+            Guardar precio
+          </button>
+        )}
+        <button type="button" disabled={save.isPending} onClick={() => save.mutate({ ...product, active: !product.active })}>
+          {product.active ? "Quitar del menú" : "Volver a ofrecer"}
+        </button>
+        {save.error && <span className="warn">{save.error.message}</span>}
+      </td>
+    </tr>
+  );
+}
+
+function ProductsAdmin() {
+  const utils = trpc.useUtils();
+  const list = trpc.admin.products.useQuery();
+  const [form, setForm] = useState({ name: "", category: "", price: "" });
+  const create = trpc.admin.productSave.useMutation({
+    onSuccess: () => {
+      setForm({ name: "", category: form.category, price: "" });
+      return Promise.all([utils.admin.products.invalidate(), utils.member.menu.invalidate()]);
+    },
+  });
+  const cents = parseMoney(form.price);
+  return (
+    <Panel title="Menú del mostrador">
+      <p className="panel__lead">Lo que se puede cobrar con el saldo de la tarjeta: comida, bebidas, lo que vendan en la arena.</p>
+      <form
+        className="form form--inline"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (cents !== null) create.mutate({ name: form.name, category: form.category, priceCents: cents, active: true });
+        }}
+      >
+        <Field label="Producto">
+          <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ramen picante" required />
+        </Field>
+        <Field label="Categoría">
+          <input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="Comida" required />
+        </Field>
+        <Field label="Precio en REF">
+          <input value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} inputMode="decimal" placeholder="3,50" required />
+        </Field>
+        <button className="btn btn--small" type="submit" disabled={create.isPending || cents === null}>
+          Agregar al menú
+        </button>
+      </form>
+      <Notice>{create.error?.message ?? (form.price && cents === null ? "Escribe el precio así: 3 o 3,50." : null)}</Notice>
+      {list.data && list.data.length > 0 && (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Precio (REF)</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.data.map((p) => (
+                <ProductRow key={`${p.id}-${p.priceCents}-${p.active}`} product={{ id: p.id, name: p.name, category: p.category, priceCents: p.priceCents, active: p.active }} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 // ---------- Personal ----------
 function StaffAdmin() {
   const utils = trpc.useUtils();
@@ -413,6 +500,7 @@ export default function Admin() {
   return (
     <div className="admin">
       {config.data ? <ConfigForm config={config.data} /> : <p className="empty">Cargando…</p>}
+      <ProductsAdmin />
       <StationsAdmin />
       <StaffAdmin />
       <MembersAdmin />
