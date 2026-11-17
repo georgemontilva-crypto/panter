@@ -18,6 +18,7 @@ const OFFLINE_AFTER_MS = 15000;
 // PANTER_CONFIG_DIR permite usar otra carpeta de configuración (pruebas).
 if (process.env.PANTER_CONFIG_DIR) app.setPath("userData", process.env.PANTER_CONFIG_DIR);
 const configFile = () => path.join(app.getPath("userData"), "config.json");
+const ICON = path.join(__dirname, "build", "icon.ico");
 const sha = (text) => crypto.createHash("sha256").update(String(text)).digest("hex");
 
 let config = null; // { serverUrl, token, pinHash }
@@ -152,6 +153,7 @@ function createLockWindow() {
   lockWin = new BrowserWindow({
     show: false,
     frame: false,
+    icon: ICON,
     alwaysOnTop: true,
     skipTaskbar: true,
     minimizable: false,
@@ -178,6 +180,7 @@ function createSetupWindow() {
   setupWin = new BrowserWindow({
     width: 620,
     height: 660,
+    icon: ICON,
     resizable: false,
     maximizable: false,
     autoHideMenuBar: true,

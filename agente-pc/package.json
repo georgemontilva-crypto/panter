@@ -1,7 +1,7 @@
 {
   "name": "panter-bloqueo",
   "productName": "Panter Bloqueo",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Programa de bloqueo de las PC de Arena Panter",
   "author": "Arena Panter",
   "private": true,
@@ -24,17 +24,22 @@
       "preload.js",
       "lock.html",
       "overlay.html",
-      "mark.svg"
+      "mark.svg",
+      "build/icon.ico"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": true,
       "perMachine": false,
       "runAfterFinish": true,
       "artifactName": "Panter-Bloqueo-Setup-${version}.${ext}",
-      "include": "installer.nsh"
+      "include": "installer.nsh",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "shortcutName": "Panter Bloqueo"
     },
     "extraResources": [
       {
