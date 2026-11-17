@@ -10,7 +10,7 @@ const { app, BrowserWindow, ipcMain, screen, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { spawn, execFile } = require("node:child_process");
+const { spawn, execFile, spawnSync } = require("node:child_process");
 const QRCode = require("qrcode");
 
 const POLL_MS = 3000;
@@ -26,6 +26,7 @@ let lockWin = null;
 let overlayWin = null;
 let setupWin = null;
 let quitting = false;
+let shuttingDown = false;
 
 // Lo último que dijo el servidor, con las horas ya convertidas al reloj de esta PC.
 let remote = null; // { state, station, pairCode, session: { memberName, endsAt, graceEndsAt }, unlockUntil }
@@ -138,15 +139,65 @@ const POLICIES = [
   ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoLogoff"],
 ];
 
-function setPolicies(on) {
+function setPolicies(on, wait = false) {
   if (!IS_WINDOWS || policiesOn === on) return;
   policiesOn = on;
   for (const [key, name] of POLICIES) {
     const args = on ? ["add", key, "/v", name, "/t", "REG_DWORD", "/d", "1", "/f"] : ["delete", key, "/v", name, "/f"];
     // Si la cuenta no tiene permiso para escribir la política, se sigue sin ella (ver README).
-    execFile("reg.exe", args, { windowsHide: true }, () => {});
+    try {
+      if (wait) spawnSync("reg.exe", args, { windowsHide: true, timeout: 4000 });
+      else execFile("reg.exe", args, { windowsHide: true }, () => {});
+    } catch {
+      /* sin reg.exe no hay nada que hacer */
+    }
   }
 }
+
+// ---------- Cierre ----------
+// Único camino para cerrar el programa. Antes se usaba app.quit(), que en Windows se cancelaba
+// (la ventana de bloqueo no se dejaba cerrar) y dejaba la pantalla congelada con un error detrás.
+// Aquí se paran los relojes, se sueltan el teclado y las políticas, se destruyen las ventanas
+// y se termina el proceso sin pedirle permiso a ninguna ventana.
+const timers = [];
+function shutdown(code = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  quitting = true;
+  for (const id of timers) clearInterval(id);
+  try {
+    if (guard) {
+      const child = guard;
+      guard = null;
+      child.stdin.end("quit\n");
+      child.kill();
+    }
+  } catch {
+    /* el ayudante ya no estaba */
+  }
+  setPolicies(false, true);
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.destroy();
+    } catch {
+      /* ya destruida */
+    }
+  }
+  app.exit(code);
+}
+
+// Un error inesperado nunca debe abrir un cuadro de diálogo: quedaría escondido detrás de la
+// pantalla de bloqueo y congelaría la PC. Se anota en error.log y el programa sigue.
+function logError(kind, error) {
+  try {
+    fs.mkdirSync(app.getPath("userData"), { recursive: true });
+    fs.appendFileSync(path.join(app.getPath("userData"), "error.log"), `${new Date().toISOString()} ${kind}: ${error?.stack || error}\n`);
+  } catch {
+    /* sin disco no se anota */
+  }
+}
+process.on("uncaughtException", (error) => logError("uncaughtException", error));
+process.on("unhandledRejection", (error) => logError("unhandledRejection", error));
 
 // ---------- Ventanas ----------
 function createLockWindow() {
@@ -157,7 +208,6 @@ function createLockWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     minimizable: false,
-    closable: false,
     backgroundColor: "#000000",
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
   });
@@ -192,10 +242,7 @@ function createSetupWindow() {
   setupWin.on("closed", () => {
     setupWin = null;
     // Cerrar la ventana sin haber conectado la PC cierra el programa.
-    if (!config) {
-      quitting = true;
-      app.quit();
-    }
+    if (!config) shutdown();
   });
 }
 
@@ -267,7 +314,6 @@ function showCovers() {
       skipTaskbar: true,
       focusable: false,
       minimizable: false,
-      closable: false,
       alwaysOnTop: true,
       backgroundColor: "#000000",
     });
@@ -313,6 +359,7 @@ function currentView() {
 }
 
 function render() {
+  if (quitting || lockWin.isDestroyed() || overlayWin.isDestroyed()) return;
   const view = currentView();
   const unlocked = view.phase === "activa" || view.phase === "gracia" || view.phase === "mantenimiento";
   if (view.phase === "configurar") {
@@ -348,7 +395,7 @@ function render() {
 }
 
 async function poll() {
-  if (!config) return;
+  if (!config || quitting) return;
   try {
     const response = await fetch(`${config.serverUrl}/api/agent/heartbeat`, {
       method: "POST",
@@ -424,19 +471,44 @@ ipcMain.handle("maintenance", (_event, input) => {
     render();
     return { ok: true };
   }
-  quitting = true;
-  stopGuard();
-  setPolicies(false);
-  // Un instante para que Windows termine de quitar las políticas antes de cerrar.
-  setTimeout(() => app.quit(), 400);
+  // Primero se responde a la pantalla y enseguida se cierra todo.
+  setTimeout(() => shutdown(), 100);
   return { ok: true };
 });
 
 ipcMain.handle("view", () => currentView());
 
 // ---------- Arranque ----------
+// ---------- Autoprueba (solo en la compilación de GitHub) ----------
+// Con PANTER_SELFTEST=1 el programa arranca contra un servidor simulado, anota en selftest.json
+// cómo quedó la pantalla de bloqueo en un Windows real y después se cierra por el mismo camino
+// que el botón "Cerrar el programa" de mantenimiento. Si ese cierre falla, la compilación falla.
+function runSelfTest() {
+  setTimeout(() => {
+    let taskManagerPolicy = null;
+    if (IS_WINDOWS) {
+      const query = spawnSync("reg.exe", ["query", POLICIES[0][0], "/v", POLICIES[0][1]], { encoding: "utf8", windowsHide: true });
+      taskManagerPolicy = query.status === 0 && /0x1/.test(query.stdout || "");
+    }
+    const report = {
+      version: app.getVersion(),
+      phase: currentView().phase,
+      lockVisible: lockWin.isVisible(),
+      kiosk: lockWin.isKiosk(),
+      focused: lockWin.isFocused(),
+      bounds: lockWin.getBounds(),
+      display: screen.getPrimaryDisplay().bounds,
+      guard: guardStatus,
+      taskManagerPolicy,
+    };
+    fs.writeFileSync(path.join(app.getPath("userData"), "selftest.json"), JSON.stringify(report, null, 2));
+    // Se pulsa "Cerrar el programa" desde la propia pantalla de bloqueo, con la clave de prueba.
+    lockWin.webContents.executeJavaScript('window.panter.maintenance({ pin: "1234", action: "quit" })').catch((error) => logError("selftest", error));
+  }, 8000);
+}
+
 if (!app.requestSingleInstanceLock()) {
-  app.quit();
+  app.exit(0);
 } else {
   app.whenReady().then(() => {
     loadConfig();
@@ -447,19 +519,20 @@ if (!app.requestSingleInstanceLock()) {
     createOverlayWindow();
     lockWin.once("ready-to-show", () => render());
     poll();
-    setInterval(poll, POLL_MS);
+    timers.push(setInterval(poll, POLL_MS));
     // Entre consulta y consulta, el reloj local decide: la PC se bloquea a tiempo aunque no haya internet.
-    setInterval(render, 1000);
+    timers.push(setInterval(render, 1000));
     // Si otra ventana le quita el foco a la pantalla de bloqueo, lo recupera.
     const refocus = () => {
-      if (!quitting && lockWin.isVisible() && !lockWin.isFocused()) {
+      if (!quitting && !lockWin.isDestroyed() && lockWin.isVisible() && !lockWin.isFocused()) {
         lockWin.setAlwaysOnTop(true, "screen-saver");
         lockWin.moveTop();
         lockWin.focus();
       }
     };
-    setInterval(refocus, 250);
+    timers.push(setInterval(refocus, 250));
     lockWin.on("blur", () => setTimeout(refocus, 30));
+    if (process.env.PANTER_SELFTEST) runSelfTest();
   });
   app.on("window-all-closed", () => {});
   app.on("before-quit", (event) => {

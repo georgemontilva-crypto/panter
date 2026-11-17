@@ -49,6 +49,38 @@ jobs:
           $ruta = "dist\win-unpacked\resources\keyblock.exe"
           if (-not (Test-Path $ruta)) { Write-Error "keyblock.exe no quedó empaquetado en $ruta"; exit 1 }
           Write-Host "keyblock.exe empaquetado: $((Get-Item $ruta).Length) bytes"
+      - name: Autoprueba en Windows (bloquea, se revisa y se cierra con la clave)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "panter-selftest"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          # Clave de mantenimiento de prueba: 1234
+          $pinHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes("1234"))).Replace("-", "").ToLower()
+          @{ serverUrl = "http://127.0.0.1:47811"; token = "pc_SELFTEST"; pinHash = $pinHash } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $dir "config.json")
+          $server = Start-Process node -ArgumentList "selftest-server.js" -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 2
+          $env:PANTER_CONFIG_DIR = $dir
+          $env:PANTER_SELFTEST = "1"
+          $app = Start-Process "dist\win-unpacked\Panter Bloqueo.exe" -PassThru
+          $cerro = $app.WaitForExit(60000)
+          Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          if (Test-Path (Join-Path $dir "selftest.json")) { Write-Host "--- selftest.json ---"; Get-Content (Join-Path $dir "selftest.json") }
+          if (Test-Path (Join-Path $dir "error.log")) { Write-Host "--- error.log ---"; Get-Content (Join-Path $dir "error.log") }
+          if (-not $cerro) {
+            Get-Process "Panter Bloqueo", "keyblock" -ErrorAction SilentlyContinue | Stop-Process -Force
+            Write-Error "El programa NO se cerró con la clave de mantenimiento."
+            exit 1
+          }
+          Write-Host "El programa se cerró con código $($app.ExitCode)."
+          Start-Sleep -Seconds 2
+          $quedan = Get-Process "Panter Bloqueo", "keyblock" -ErrorAction SilentlyContinue
+          if ($quedan) { $quedan | Format-Table Name, Id; Write-Error "Quedaron procesos vivos después de cerrar."; exit 1 }
+          reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableTaskMgr 2>$null
+          if ($LASTEXITCODE -eq 0) { Write-Error "La política que quita el Administrador de tareas siguió puesta después de cerrar."; exit 1 }
+          Write-Host "Políticas de Windows retiradas al cerrar."
+          if (-not (Test-Path (Join-Path $dir "selftest.json"))) { Write-Error "La autoprueba no dejó su informe."; exit 1 }
+          if ($app.ExitCode -ne 0) { exit 1 }
+          exit 0
       - name: Publicar en Releases
         shell: bash
         env:

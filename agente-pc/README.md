@@ -137,6 +137,6 @@ reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v
 
 ## Estado de esta versión
 
-Es la versión 0.2.4. La lógica (bloqueo, contador, tiempo extra, corte de internet, reconexión) está probada contra el servidor
+Es la versión 0.2.5. La lógica (bloqueo, contador, tiempo extra, corte de internet, reconexión) está probada contra el servidor
 en un entorno de pruebas con Linux. El bloqueo de teclas y las políticas de Windows solo existen en Windows y no se pudieron probar ahí. **Falta probarla en una PC real con Windows** antes de instalarla en toda la arena:
 empieza por una sola máquina.
