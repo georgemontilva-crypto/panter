@@ -1,0 +1,44 @@
+# Compila el instalador de Windows del programa de bloqueo y lo publica en Releases.
+# Corre solo cuando cambia algo dentro de agente-pc/, o a mano desde la pestaña Actions.
+name: Instalador del programa de bloqueo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agente-pc/**"
+      - ".github/workflows/agente-pc.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  instalador:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: agente-pc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Instalar dependencias
+        run: npm install
+      - name: Compilar el instalador
+        run: npx electron-builder --win nsis --x64 --publish never
+      - name: Publicar en Releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="agente-v$VERSION"
+          FILE="dist/Panter-Bloqueo-Setup-$VERSION.exe"
+          ls -la dist
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "Panter Bloqueo $VERSION" \
+              --notes "Instalador del programa de bloqueo para las PC de la arena. Pasos de instalación: agente-pc/README.md"
+          fi
+          gh release upload "$TAG" "$FILE" --clobber
