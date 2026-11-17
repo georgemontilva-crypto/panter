@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { TX_LABEL, trpc, type MemberHome } from "./api";
+import PayCard from "./PayCard";
 import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, clock, countdown, duration, ref, useNowTick, when } from "./ui";
 
 const Scanner = lazy(() => import("./Scanner"));
@@ -302,7 +303,7 @@ function ActivatePc({ home }: { home: MemberHome }) {
 }
 
 // ---------- Menú del mostrador y compras ----------
-function MenuAndOrders({ home }: { home: MemberHome }) {
+function MenuAndOrders({ home, onPay }: { home: MemberHome; onPay: () => void }) {
   const menu = trpc.member.menu.useQuery(undefined, { staleTime: 60_000 });
   const items = menu.data ?? [];
   if (items.length === 0 && home.orders.length === 0) return null;
@@ -311,7 +312,7 @@ function MenuAndOrders({ home }: { home: MemberHome }) {
     <>
       {items.length > 0 && (
         <Panel title="Menú">
-          <p className="panel__lead">Pide en el mostrador y paga con tu tarjeta: muestran tu QR, lo escanean y se descuenta de tu saldo.</p>
+          <p className="panel__lead">Pide en el mostrador y paga con tu tarjeta: escanean tu código y se descuenta de tu saldo.</p>
           {categories.map((category) => (
             <div className="menu-list" key={category}>
               <h3>{category}</h3>
@@ -327,6 +328,9 @@ function MenuAndOrders({ home }: { home: MemberHome }) {
               </ul>
             </div>
           ))}
+          <button className="btn menu-list__pay" type="button" onClick={onPay}>
+            Pagar con tarjeta Panter
+          </button>
         </Panel>
       )}
       {home.orders.length > 0 && (
@@ -357,6 +361,7 @@ function Wallet({ home }: { home: MemberHome }) {
   const span = next ? next.min - current.min : 1;
   const progress = next ? Math.min(1, (home.visitsCount - current.min) / span) : 1;
   const toBonus = home.loyalty.bonusCents > 0 ? home.loyalty.every - (home.visitsCount % home.loyalty.every) : null;
+  const [paying, setPaying] = useState(false);
 
   return (
     <div className="wallet">
@@ -367,7 +372,10 @@ function Wallet({ home }: { home: MemberHome }) {
       <div className="wallet__top">
         <div className="wallet__card">
           <MemberCard name={home.name} code={home.memberCode} qr={home.cardQr} level={current.name} balanceCents={home.balanceCents} />
-          <p className="wallet__hint">Para recargar, muestra este QR en caja.</p>
+          <button className="btn wallet__pay" type="button" onClick={() => setPaying(true)}>
+            Pagar con tarjeta Panter
+          </button>
+          <p className="wallet__hint">Abre tu tarjeta con el código en grande. También sirve para recargar en caja.</p>
         </div>
         <div className="wallet__side">
           <Panel className="loyalty">
@@ -388,7 +396,7 @@ function Wallet({ home }: { home: MemberHome }) {
       </div>
 
       {home.sessions.length === 0 && <ActivatePc home={home} />}
-      <MenuAndOrders home={home} />
+      <MenuAndOrders home={home} onPay={() => setPaying(true)} />
 
       <Panel title="Movimientos">
         {home.tx.length === 0 ? (
@@ -413,6 +421,7 @@ function Wallet({ home }: { home: MemberHome }) {
           </ul>
         )}
       </Panel>
+      {paying && <PayCard home={home} onClose={() => setPaying(false)} />}
     </div>
   );
 }
