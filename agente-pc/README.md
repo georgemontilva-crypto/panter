@@ -26,9 +26,12 @@ Para compilarlo tú mismo (opcional), con Node.js 20 o más nuevo, en PowerShell
 
 ```powershell
 cd agente-pc
+& "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /optimize+ /target:exe /out:keyblock.exe keyblock.cs
 npm install
 npm run dist
 ```
+
+La segunda línea compila `keyblock.exe` (el guardia de teclado) con el compilador que ya trae Windows.
 
 Para probarlo sin instalar:
 
@@ -56,21 +59,52 @@ Mientras la PC no esté conectada, el programa no bloquea nada: si cierras esa v
 - **Cambiar la credencial o la dirección:** **Mantenimiento** → *Volver a configurar*.
 - **Desinstalar:** Configuración de Windows → Aplicaciones → Panter Bloqueo → Desinstalar.
 
-## Para que el bloqueo sea difícil de saltar
+## Qué bloquea y qué no
 
-Un programa normal no puede bloquear `Ctrl + Alt + Supr` ni la tecla Windows: eso lo controla Windows. Por eso cada PC debe quedar así:
+Con la PC bloqueada, el programa:
 
-1. Los clientes usan una **cuenta de Windows estándar** (sin permisos de administrador) que inicia sesión sola.
-2. En esa cuenta, desactiva el Administrador de tareas. En PowerShell, con esa cuenta abierta:
+- Cubre toda la pantalla (y cualquier monitor adicional) y se mantiene encima de todo.
+- **Descarta la tecla Windows, Alt+Tab, Alt+Esc, Alt+F4, Alt+Espacio, Ctrl+Esc y Ctrl+Mayús+Esc.** Lo hace `keyblock.exe`, un ayudante que se instala junto al programa.
+- **Quita el Administrador de tareas** y deja la pantalla de `Ctrl + Alt + Supr` sin "Bloquear", "Cerrar sesión" ni "Cambiar contraseña".
 
-   ```powershell
-   reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableTaskMgr /t REG_DWORD /d 1 /f
-   ```
+Mientras un cliente juega, el teclado funciona normal (necesita la tecla Windows y Alt+Tab para sus juegos), pero el Administrador de tareas sigue quitado para que no pueda cerrar el programa.
 
-3. Pon los juegos en **ventana sin bordes** cuando el juego lo permita. En pantalla completa exclusiva algunos juegos tapan el contador y el aviso de tiempo extra (el aviso sonoro y el bloqueo funcionan igual).
+Lo que **ningún programa puede impedir**:
+
+- Que `Ctrl + Alt + Supr` muestre su pantalla. Queda casi vacía: solo sirve para cancelar o para apagar/reiniciar.
+- Que apaguen o reinicien la PC (botón físico o esa pantalla). Al encender, vuelve a arrancar bloqueada.
+
+La única salida es el botón **Mantenimiento** con la clave del personal.
+
+### Recomendado en cada PC
+
+1. Que los clientes usen una **cuenta de Windows estándar** (sin permisos de administrador) que inicie sesión sola. Así no pueden desinstalar el programa ni abrir herramientas de administrador.
+2. Poner los juegos en **ventana sin bordes** cuando el juego lo permita. En pantalla completa exclusiva algunos juegos tapan el contador y el aviso de tiempo extra (el aviso sonoro y el bloqueo funcionan igual).
+
+### Si el Administrador de tareas sigue abriendo
+
+En algunas cuentas Windows no deja que un programa cambie esas políticas. Ponlas una vez a mano: abre PowerShell **como administrador** con la cuenta de los clientes y pega:
+
+```powershell
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableTaskMgr /t REG_DWORD /d 1 /f
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableLockWorkstation /t REG_DWORD /d 1 /f
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableChangePassword /t REG_DWORD /d 1 /f
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoLogoff /t REG_DWORD /d 1 /f
+```
+
+### Cómo deshacerlo
+
+El programa quita esas políticas solo al entrar en mantenimiento, al cerrarlo con la clave y al desinstalarlo. Para quitarlas a mano:
+
+```powershell
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableTaskMgr /f
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableLockWorkstation /f
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System" /v DisableChangePassword /f
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v NoLogoff /f
+```
 
 ## Estado de esta versión
 
-Es la versión 0.1.1. La lógica (bloqueo, contador, tiempo extra, corte de internet, reconexión) está probada contra el servidor
-en un entorno de pruebas con Linux. **Falta probarla en una PC real con Windows** antes de instalarla en toda la arena:
+Es la versión 0.2.0. La lógica (bloqueo, contador, tiempo extra, corte de internet, reconexión) está probada contra el servidor
+en un entorno de pruebas con Linux. El bloqueo de teclas y las políticas de Windows solo existen en Windows y no se pudieron probar ahí. **Falta probarla en una PC real con Windows** antes de instalarla en toda la arena:
 empieza por una sola máquina.

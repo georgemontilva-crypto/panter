@@ -1,7 +1,7 @@
 {
   "name": "panter-bloqueo",
   "productName": "Panter Bloqueo",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Programa de bloqueo de las PC de Arena Panter",
   "author": "Arena Panter",
   "private": true,
@@ -33,7 +33,14 @@
       "oneClick": true,
       "perMachine": false,
       "runAfterFinish": true,
-      "artifactName": "Panter-Bloqueo-Setup-${version}.${ext}"
-    }
+      "artifactName": "Panter-Bloqueo-Setup-${version}.${ext}",
+      "include": "installer.nsh"
+    },
+    "extraResources": [
+      {
+        "from": "keyblock.exe",
+        "to": "keyblock.exe"
+      }
+    ]
   }
 }

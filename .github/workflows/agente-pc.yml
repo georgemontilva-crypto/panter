@@ -26,6 +26,21 @@ jobs:
           node-version: 22
       - name: Instalar dependencias
         run: npm install
+      - name: Compilar el guardia de teclado
+        shell: pwsh
+        run: |
+          # csc viene con Windows (.NET Framework 4): no hace falta instalar nada.
+          $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /nologo /optimize+ /target:exe /out:keyblock.exe keyblock.cs
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # Prueba mínima: debe arrancar, avisar "ready" y terminar al recibir "quit".
+          $salida = "quit" | .\keyblock.exe
+          Write-Host "keyblock respondió: '$salida' (código $LASTEXITCODE)"
+          if ($salida -notmatch "ready") {
+            if ($LASTEXITCODE -eq 2) { Write-Warning "El gancho no se pudo instalar en esta máquina de compilación (no tiene escritorio interactivo)." }
+            else { Write-Error "keyblock no arrancó bien."; exit 1 }
+          }
+          exit 0
       - name: Compilar el instalador
         run: npx electron-builder --win nsis --x64 --publish never
       - name: Publicar en Releases

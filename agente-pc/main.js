@@ -10,6 +10,7 @@ const { app, BrowserWindow, ipcMain, screen, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { spawn, execFile } = require("node:child_process");
 const QRCode = require("qrcode");
 
 const POLL_MS = 3000;
@@ -45,6 +46,88 @@ function saveConfig(next) {
   fs.mkdirSync(path.dirname(configFile()), { recursive: true });
   fs.writeFileSync(configFile(), JSON.stringify(next, null, 2));
   config = next;
+}
+
+// ---------- Blindaje de Windows ----------
+// Dos piezas que hacen que la pantalla de bloqueo no tenga salida:
+//  1. keyblock.exe descarta la tecla Windows, Alt+Tab, Alt+F4 y Ctrl+Esc mientras la PC está bloqueada.
+//  2. Unas políticas de Windows para este usuario quitan el Administrador de tareas y dejan la
+//     pantalla de Ctrl+Alt+Supr sin "Bloquear", "Cerrar sesión" ni "Cambiar contraseña".
+// Todo es reversible: se quita al entrar en mantenimiento, al cerrar el programa con la clave
+// y al desinstalar. Fuera de Windows (pruebas) estas funciones no hacen nada.
+const IS_WINDOWS = process.platform === "win32";
+let guard = null;
+let guardLocked = false;
+let policiesOn = null;
+
+function guardPath() {
+  return app.isPackaged ? path.join(process.resourcesPath, "keyblock.exe") : path.join(__dirname, "keyblock.exe");
+}
+
+function startGuard() {
+  if (!IS_WINDOWS || guard || quitting || !fs.existsSync(guardPath())) return;
+  try {
+    const child = spawn(guardPath(), [String(process.pid)], { windowsHide: true, stdio: ["pipe", "ignore", "ignore"] });
+    child.on("error", () => {
+      if (guard === child) guard = null;
+    });
+    // Si alguien lo cierra, se vuelve a lanzar en el siguiente ciclo (render corre cada segundo).
+    child.on("exit", () => {
+      if (guard === child) guard = null;
+    });
+    child.stdin.on("error", () => {});
+    guard = child;
+    child.stdin.write(guardLocked ? "lock\n" : "unlock\n");
+  } catch {
+    guard = null;
+  }
+}
+
+/** true = descartar las teclas del sistema; false = dejar pasar todo. */
+function setKeyGuard(locked) {
+  if (!IS_WINDOWS) return;
+  if (!guard) {
+    guardLocked = locked;
+    if (locked) startGuard();
+    return;
+  }
+  if (locked === guardLocked) return;
+  guardLocked = locked;
+  try {
+    guard.stdin.write(locked ? "lock\n" : "unlock\n");
+  } catch {
+    /* el ayudante murió: se relanza en el siguiente ciclo */
+  }
+}
+
+function stopGuard() {
+  const child = guard;
+  guard = null;
+  guardLocked = false;
+  if (!child) return;
+  try {
+    child.stdin.end("quit\n");
+  } catch {
+    /* ya estaba cerrado */
+  }
+  setTimeout(() => child.kill(), 300).unref();
+}
+
+const POLICIES = [
+  ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableTaskMgr"],
+  ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableLockWorkstation"],
+  ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableChangePassword"],
+  ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoLogoff"],
+];
+
+function setPolicies(on) {
+  if (!IS_WINDOWS || policiesOn === on) return;
+  policiesOn = on;
+  for (const [key, name] of POLICIES) {
+    const args = on ? ["add", key, "/v", name, "/t", "REG_DWORD", "/d", "1", "/f"] : ["delete", key, "/v", name, "/f"];
+    // Si la cuenta no tiene permiso para escribir la política, se sigue sin ella (ver README).
+    execFile("reg.exe", args, { windowsHide: true }, () => {});
+  }
 }
 
 // ---------- Ventanas ----------
@@ -141,12 +224,44 @@ function showLock() {
   lockWin.setAlwaysOnTop(true, "screen-saver");
   if (!lockWin.isFocused()) lockWin.focus();
   if (overlayWin.isVisible()) overlayWin.hide();
+  showCovers();
 }
 
 function hideLock() {
+  hideCovers();
   if (!lockWin.isVisible()) return;
   lockWin.setKiosk(false);
   lockWin.hide();
+}
+
+// Monitores adicionales: se tapan en negro para que no quede un escritorio usable al lado.
+let covers = [];
+function showCovers() {
+  const others = screen.getAllDisplays().filter((d) => d.id !== screen.getPrimaryDisplay().id);
+  if (covers.length === others.length) return;
+  hideCovers();
+  covers = others.map((display) => {
+    const win = new BrowserWindow({
+      ...display.bounds,
+      frame: false,
+      skipTaskbar: true,
+      focusable: false,
+      minimizable: false,
+      closable: false,
+      alwaysOnTop: true,
+      backgroundColor: "#000000",
+    });
+    win.setAlwaysOnTop(true, "screen-saver");
+    win.on("close", (event) => {
+      if (!quitting && covers.includes(win)) event.preventDefault();
+    });
+    return win;
+  });
+}
+function hideCovers() {
+  const old = covers;
+  covers = [];
+  for (const win of old) if (!win.isDestroyed()) win.destroy();
 }
 
 function showDesktop(big) {
@@ -183,6 +298,14 @@ function render() {
     if (setupWin) setupWin.destroy();
     if (unlocked) showDesktop(view.phase === "gracia");
     else showLock();
+  }
+  if (!quitting) {
+    // Teclas del sistema: solo se descartan con la pantalla de bloqueo puesta.
+    setKeyGuard(view.phase !== "configurar" && !unlocked);
+    if (!guard && guardLocked) startGuard();
+    // Políticas: activas siempre que la PC esté en servicio (bloqueada o con un cliente jugando),
+    // para que nadie cierre este programa desde el Administrador de tareas. Se quitan en mantenimiento.
+    setPolicies(view.phase !== "configurar" && view.phase !== "mantenimiento");
   }
 
   if (view.phase !== lastPhase) {
@@ -267,6 +390,8 @@ ipcMain.handle("setup", async (_event, input) => {
 ipcMain.handle("maintenance", (_event, input) => {
   if (!config || sha(input.pin) !== config.pinHash) return { ok: false, error: "Clave incorrecta." };
   if (input.action === "reset") {
+    stopGuard();
+    setPolicies(false);
     fs.rmSync(configFile(), { force: true });
     config = null;
     remote = null;
@@ -275,7 +400,10 @@ ipcMain.handle("maintenance", (_event, input) => {
     return { ok: true };
   }
   quitting = true;
-  app.quit();
+  stopGuard();
+  setPolicies(false);
+  // Un instante para que Windows termine de quitar las políticas antes de cerrar.
+  setTimeout(() => app.quit(), 400);
   return { ok: true };
 });
 
