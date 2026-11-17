@@ -1,5 +1,23 @@
 import { useEffect, useState } from "react";
-import { hours } from "./content";
+import { hours as defaultHours } from "./content";
+
+// Horario vigente. Arranca con el de content.ts y, si el servidor tiene uno editado en
+// Caja → Ajustes, se reemplaza al cargar la página (ver loadSchedule).
+let hours: Record<number, [number, number]> = defaultHours;
+export const getHours = () => hours;
+
+export async function loadSchedule() {
+  try {
+    const response = await fetch("/api/public/schedule");
+    if (!response.ok) return;
+    const data = (await response.json()) as { hours?: [number, number][] };
+    if (Array.isArray(data.hours) && data.hours.length === 7) {
+      hours = Object.fromEntries(data.hours.map((range, day) => [day, range]));
+    }
+  } catch {
+    /* sin servidor de cuentas: se queda el horario de content.ts */
+  }
+}
 
 // Maracaibo usa UTC-4 todo el año (sin horario de verano).
 const OFFSET_MS = -4 * 60 * 60 * 1000;

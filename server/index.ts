@@ -11,7 +11,7 @@ import { users } from "./db/schema";
 import { accountsEnabled, env } from "./env";
 import { normalizePhone } from "./lib";
 import { appRouter } from "./router";
-import { createUser, finalizeExpired } from "./services";
+import { createUser, finalizeExpired, getConfig } from "./services";
 import { createContext } from "./trpc";
 
 const app = express();
@@ -44,6 +44,12 @@ if (accountsEnabled()) {
   await initDb();
   await bootstrapAdmin();
   app.use("/api/agent", agentRouter);
+  // Horario vigente para la portada (el que se edita en Caja → Ajustes).
+  app.get("/api/public/schedule", async (_req, res) => {
+    const config = await getConfig();
+    res.setHeader("Cache-Control", "public, max-age=60");
+    res.json({ hours: config.hours });
+  });
   app.use("/api/trpc", createExpressMiddleware({ router: appRouter, createContext }));
   // Cierra las sesiones vencidas aunque nadie esté mirando el panel.
   setInterval(() => finalizeExpired().catch((error) => console.error("[panter] finalizeExpired", error)), 20_000).unref();

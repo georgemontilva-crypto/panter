@@ -1,6 +1,8 @@
 import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import { db, type Tx } from "./db";
 import { PAY_METHODS, STATION_KINDS, TX_TYPES, sessions, settings, stations, users, visits, walletTx } from "./db/schema";
+import { hours as defaultHours } from "../src/content";
+import { closingAt, closingProblem, sellableMinutes, type WeekHours } from "./closing";
 import { MINUTE, caracasDate, fail, newCardToken, newMemberCode, newPairCode, now } from "./lib";
 
 export type StationKind = (typeof STATION_KINDS)[number];
@@ -54,6 +56,10 @@ export type Config = {
   loyaltyEvery: number;
   loyaltyBonusCents: number;
   levels: { name: string; min: number }[];
+  /** Horario por día de la semana (0 = domingo), en minutos desde la medianoche. */
+  hours: WeekHours;
+  /** Cierre extendido para una noche especial (ms UTC), o null. */
+  extendedUntil: number | null;
 };
 
 export const DEFAULT_CONFIG: Config = {
@@ -69,7 +75,15 @@ export const DEFAULT_CONFIG: Config = {
     { name: "Pantera", min: 15 },
     { name: "Alfa", min: 30 },
   ],
+  hours: [0, 1, 2, 3, 4, 5, 6].map((day) => [...defaultHours[day]] as [number, number]),
+  extendedUntil: null,
 };
+
+/** Lo que la interfaz necesita para ofrecer solo los tiempos que caben antes del cierre. */
+export function closingInfo(config: Config) {
+  const t = now();
+  return { closesAt: closingAt(config, t), maxMinutes: sellableMinutes(config, t) };
+}
 
 export async function getConfig(): Promise<Config> {
   const [row] = await db.select().from(settings).where(eq(settings.key, "config"));
@@ -248,6 +262,9 @@ export async function startSession(input: {
 
     const rate = config.rates[station.kind];
     if (!rate) fail("BAD_REQUEST", "Esa estación todavía no tiene tarifa. Configúrala en el panel de administración.");
+    // No se vende tiempo que pase de la hora de cierre.
+    const tooLong = closingProblem(config, t, input.minutes, input.staffId === null ? 30 : 15);
+    if (tooLong) fail("BAD_REQUEST", tooLong);
     const cost = costFor(rate, input.minutes);
     const endsAt = t + input.minutes * MINUTE;
 
@@ -294,6 +311,9 @@ export async function extendSession(input: { sessionId: number; minutes: number;
     const [station] = await tx.select().from(stations).where(eq(stations.id, session.stationId));
     const cost = costFor(config.rates[station.kind], input.minutes);
     if (!cost) fail("BAD_REQUEST", "Esa estación no tiene tarifa configurada.");
+    // El tiempo extra se cuenta desde el final de la sesión: tampoco puede pasar del cierre.
+    const tooLong = closingProblem(config, t, input.minutes, input.staffId === null ? 30 : 15, Math.max(t, session.endsAt));
+    if (tooLong) fail("BAD_REQUEST", tooLong);
     // El tiempo se suma al final de la sesión: lo jugado durante la gracia cuenta como usado.
     const endsAt = session.endsAt + input.minutes * MINUTE;
     await tx

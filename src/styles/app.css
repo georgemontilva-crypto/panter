@@ -825,6 +825,46 @@
   flex-wrap: wrap;
   gap: 10px;
 }
+.schedule {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.schedule legend {
+  margin-bottom: 6px;
+  font-stretch: 75%;
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+.schedule__row {
+  display: grid;
+  grid-template-columns: minmax(0, 84px) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  max-width: 420px;
+}
+.schedule .field {
+  margin-top: 8px;
+  max-width: 420px;
+}
+.app input[type="time"],
+.app input[type="datetime-local"] {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 0;
+  max-width: 100%;
+  text-align: left;
+}
+.schedule__row input[type="time"] {
+  padding-inline: 8px;
+}
+/* Sin el icono del reloj cabe la hora completa con am/pm en pantallas angostas. */
+.schedule__row input[type="time"]::-webkit-calendar-picker-indicator {
+  display: none;
+}
 .levels {
   display: grid;
   gap: 8px;

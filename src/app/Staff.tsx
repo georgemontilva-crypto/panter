@@ -7,7 +7,7 @@ const Admin = lazy(() => import("./Admin"));
 // El lector de QR se descarga solo cuando se abre la cámara.
 const Scanner = lazy(() => import("./Scanner"));
 const KINDS: StationKind[] = ["pc", "ps5", "switch", "sim"];
-const STAFF_DURATIONS = [30, 60, 90, 120, 180, 240];
+const STAFF_DURATIONS = [15, 30, 45, 60, 90, 120, 180, 240];
 
 function MethodSelect({ value, onChange }: { value: MethodId; onChange: (m: MethodId) => void }) {
   return (
@@ -44,9 +44,12 @@ function MemberDetail({ id }: { id: number }) {
   if (!m) return <Panel>{member.error ? <Notice>{member.error.message}</Notice> : <p className="empty">Cargando cliente…</p>}</Panel>;
 
   const amountCents = parseMoney(amount);
+  // Solo se ofrecen los tiempos que terminan antes del cierre.
+  const durations = STAFF_DURATIONS.filter((d) => d <= m.closing.maxMinutes);
+  const playMinutes = durations.includes(minutes) ? minutes : (durations[durations.length - 1] ?? 0);
   const free = board.data?.filter((s) => s.enabled && !s.session) ?? [];
   const station = free.find((s) => s.id === stationId);
-  const cost = station ? Math.round((m.rates[station.kind] * minutes) / 60) : 0;
+  const cost = station ? Math.round((m.rates[station.kind] * playMinutes) / 60) : 0;
 
   const submitTopup = (e: FormEvent) => {
     e.preventDefault();
@@ -125,7 +128,7 @@ function MemberDetail({ id }: { id: number }) {
             className="form"
             onSubmit={(e) => {
               e.preventDefault();
-              if (station) start.mutate({ userId: m.id, stationId: station.id, minutes }, { onSuccess: () => setStationId(0) });
+              if (station && playMinutes) start.mutate({ userId: m.id, stationId: station.id, minutes: playMinutes }, { onSuccess: () => setStationId(0) });
             }}
           >
             <Field label="Estación libre">
@@ -148,18 +151,25 @@ function MemberDetail({ id }: { id: number }) {
               </select>
             </Field>
             <Field label="Tiempo">
-              <select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>
-                {STAFF_DURATIONS.map((d) => (
+              <select value={playMinutes} onChange={(e) => setMinutes(Number(e.target.value))} disabled={durations.length === 0}>
+                {durations.map((d) => (
                   <option key={d} value={d}>
                     {duration(d)}
                   </option>
                 ))}
               </select>
             </Field>
-            {station && <p className="form__lead">Se descuentan {ref(cost)}. Le quedan {ref(Math.max(0, m.balanceCents - cost))}.</p>}
+            {durations.length === 0 ? (
+              <Notice kind="info">
+                {m.closing.maxMinutes > 0 ? `Cerramos a las ${clock(m.closing.closesAt)}: ya no alcanza el tiempo para una sesión.` : "La arena está cerrada a esta hora. Para una noche especial, extiende el cierre en Ajustes."}
+              </Notice>
+            ) : (
+              durations.length < STAFF_DURATIONS.length && <p className="form__lead">Hoy cerramos a las {clock(m.closing.closesAt)}: solo aparecen los tiempos que terminan antes.</p>
+            )}
+            {station && playMinutes > 0 && <p className="form__lead">Se descuentan {ref(cost)}. Le quedan {ref(Math.max(0, m.balanceCents - cost))}.</p>}
             <Notice>{start.error?.message}</Notice>
-            <button className="btn" type="submit" disabled={start.isPending || !station}>
-              {station ? `Activar ${station.label} por ${duration(minutes)}` : "Activar estación"}
+            <button className="btn" type="submit" disabled={start.isPending || !station || !playMinutes}>
+              {station && playMinutes ? `Activar ${station.label} por ${duration(playMinutes)}` : "Activar estación"}
             </button>
           </form>
         </Panel>

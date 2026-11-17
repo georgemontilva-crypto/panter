@@ -6,6 +6,7 @@ import { PAY_METHODS, STATION_KINDS, sessions, stations, users, visits, walletTx
 import { QR_PREFIX, caracasDate, caracasDayBounds, clearRateLimit, fail, newDeviceToken, normalizePhone, now, rateLimit, sha256, MINUTE } from "./lib";
 import {
   activeSessionsOf,
+  closingInfo,
   createUser,
   endSession,
   extendSession,
@@ -58,6 +59,7 @@ async function memberDetail(u: UserRow) {
     loyalty: { every: config.loyaltyEvery, bonusCents: config.loyaltyBonusCents },
     rates: config.rates,
     graceMinutes: config.graceMinutes,
+    closing: closingInfo(config),
     cardPriceCents: config.cardPriceCents,
     createdAt: u.createdAt,
     sessions: live,
@@ -158,7 +160,10 @@ const memberRouter = router({
 const method = z.enum(PAY_METHODS);
 
 const staffRouter = router({
-  config: staffProcedure.query(() => getConfig()),
+  config: staffProcedure.query(async () => {
+    const config = await getConfig();
+    return { ...config, closing: closingInfo(config) };
+  }),
 
   find: staffProcedure.input(z.object({ q: z.string().trim().max(120) })).query(async ({ input }) => {
     const q = input.q;
@@ -296,6 +301,11 @@ const configInput = z.object({
   loyaltyEvery: z.number().int().min(1).max(100),
   loyaltyBonusCents: cents.min(0),
   levels: z.array(z.object({ name: z.string().trim().min(1).max(30), min: z.number().int().min(0) })).min(1).max(8),
+  hours: z
+    .array(z.tuple([z.number().int().min(0).max(1439), z.number().int().min(1).max(1440)]))
+    .length(7)
+    .refine((week) => week.every(([open, close]) => open < close), "En cada día, la hora de cierre debe ser después de la de apertura."),
+  extendedUntil: z.number().int().positive().nullable(),
 });
 
 const adminRouter = router({

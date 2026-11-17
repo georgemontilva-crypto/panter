@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { TX_LABEL, trpc, type MemberHome } from "./api";
-import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, countdown, duration, ref, useNowTick, when } from "./ui";
+import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, clock, countdown, duration, ref, useNowTick, when } from "./ui";
 
 const Scanner = lazy(() => import("./Scanner"));
 
@@ -104,6 +104,9 @@ function ActiveSession({ home, session }: { home: MemberHome; session: MemberHom
   const end = trpc.member.end.useMutation(refresh);
   const inGrace = now >= session.endsAt;
   const rate = home.rates[session.kind];
+  // Se puede agregar tiempo solo si la sesión sigue terminando antes del cierre (con 5 min de tolerancia).
+  const fits = (m: number) => Math.max(now, session.endsAt) + m * 60_000 <= home.closing.closesAt + 5 * 60_000;
+  const canExtend = fits(30);
   const label = `${session.kind === "pc" ? "PC" : "Estación"} ${String(session.number).padStart(2, "0")}`;
 
   return (
@@ -118,7 +121,7 @@ function ActiveSession({ home, session }: { home: MemberHome; session: MemberHom
           : `Al llegar a cero tienes ${home.graceMinutes} minutos extra para guardar.`}
       </p>
       <div className="live__actions">
-        {[30, 60].map((m) => (
+        {[30, 60].filter(fits).map((m) => (
           <button key={m} className="btn" type="button" disabled={extend.isPending} onClick={() => extend.mutate({ sessionId: session.id, minutes: m })}>
             Agregar {duration(m)} ({ref(Math.round((rate * m) / 60))})
           </button>
@@ -134,6 +137,7 @@ function ActiveSession({ home, session }: { home: MemberHome; session: MemberHom
             </button>
           ))}
       </div>
+      {!canExtend && <Notice kind="info">Cerramos a las {clock(home.closing.closesAt)}: ya no se puede agregar más tiempo hoy.</Notice>}
       <Notice>{extend.error?.message ?? end.error?.message}</Notice>
     </Panel>
   );
@@ -195,11 +199,29 @@ function ActivatePc({ home }: { home: MemberHome }) {
     setCode(scannedCode);
   };
 
+  // Solo se ofrecen los bloques que terminan antes del cierre.
+  const options = DURATIONS.filter((m) => m <= home.closing.maxMinutes);
+  const limited = options.length < DURATIONS.length;
+  useEffect(() => {
+    if (options.length && !options.includes(minutes)) setMinutes(options[options.length - 1]);
+  }, [options.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const pc = pcs.data?.find((p) => p.id === selected) ?? null;
   const cost = Math.round((home.rates.pc * minutes) / 60);
   const enough = home.balanceCents >= cost;
 
   if (pcs.data && pcs.data.length === 0) return null;
+  if (options.length === 0) {
+    return (
+      <Panel title="Activar una PC">
+        <Notice kind="info">
+          {home.closing.maxMinutes > 0
+            ? `Cerramos a las ${clock(home.closing.closesAt)} y ya no alcanza el tiempo para una sesión. Te esperamos mañana.`
+            : "La arena está cerrada en este momento. Podrás activar una PC cuando abramos."}
+        </Notice>
+      </Panel>
+    );
+  }
 
   return (
     <Panel title="Activar una PC">
@@ -255,13 +277,14 @@ function ActivatePc({ home }: { home: MemberHome }) {
           </Field>
           <fieldset className="chips">
             <legend>¿Cuánto tiempo?</legend>
-            {DURATIONS.map((m) => (
+            {options.map((m) => (
               <label key={m} className={m === minutes ? "is-active" : undefined}>
                 <input type="radio" name="minutes" checked={m === minutes} onChange={() => setMinutes(m)} />
                 {duration(m)}
               </label>
             ))}
           </fieldset>
+          {limited && <p className="form__lead">Hoy cerramos a las {clock(home.closing.closesAt)}: solo aparecen los tiempos que terminan antes.</p>}
           <p className="activate__sum">
             {home.rates.pc
               ? `Se descuentan ${ref(cost)} de tu saldo. Te quedan ${ref(Math.max(0, home.balanceCents - cost))}.`

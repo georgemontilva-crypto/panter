@@ -3,6 +3,27 @@ import { KIND_NAMES, trpc, type Config, type StationKind } from "./api";
 import { Field, Notice, Panel, STATE_LABEL, money, parseMoney, ref, when } from "./ui";
 
 const KINDS: StationKind[] = ["pc", "ps5", "switch", "sim"];
+const DAYS = [
+  { day: 1, name: "Lunes" },
+  { day: 2, name: "Martes" },
+  { day: 3, name: "Miércoles" },
+  { day: 4, name: "Jueves" },
+  { day: 5, name: "Viernes" },
+  { day: 6, name: "Sábado" },
+  { day: 0, name: "Domingo" },
+];
+
+// Horario: minutos desde la medianoche ↔ "HH:MM". El cierre a medianoche se guarda como 1440.
+const toTime = (minutes: number) => `${String(Math.floor((minutes % 1440) / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+const fromTime = (value: string, isClose: boolean) => {
+  const [h, m] = value.split(":").map(Number);
+  const total = h * 60 + m;
+  return isClose && total === 0 ? 1440 : total;
+};
+// Fecha y hora de Maracaibo (UTC-4) ↔ milisegundos UTC, para el campo datetime-local.
+const CARACAS_MS = 4 * 60 * 60 * 1000;
+const toLocalInput = (ms: number | null) => (ms ? new Date(ms - CARACAS_MS).toISOString().slice(0, 16) : "");
+const fromLocalInput = (value: string) => (value ? Date.parse(`${value}:00Z`) + CARACAS_MS : null);
 
 // ---------- Tarifas y reglas ----------
 function ConfigForm({ config }: { config: Config }) {
@@ -15,6 +36,8 @@ function ConfigForm({ config }: { config: Config }) {
   const [every, setEvery] = useState(config.loyaltyEvery);
   const [refund, setRefund] = useState(config.refundOnEarlyEnd);
   const [levels, setLevels] = useState(config.levels);
+  const [hours, setHours] = useState(config.hours);
+  const [extended, setExtended] = useState(toLocalInput(config.extendedUntil && config.extendedUntil > Date.now() ? config.extendedUntil : null));
   const [problem, setProblem] = useState("");
 
   const submit = (e: React.FormEvent) => {
@@ -26,8 +49,14 @@ function ConfigForm({ config }: { config: Config }) {
       setProblem("Revisa los montos: usa números como 2 o 2,50.");
       return;
     }
+    if (hours.some(([open, close]) => open >= close)) {
+      setProblem("Revisa el horario: en cada día el cierre debe ser después de la apertura. Para cerrar a medianoche pon 00:00.");
+      return;
+    }
     setProblem("");
     save.mutate({
+      hours,
+      extendedUntil: fromLocalInput(extended),
       rates: parsedRates as Record<StationKind, number>,
       cardPriceCents: cardCents,
       loyaltyBonusCents: bonusCents,
@@ -66,6 +95,30 @@ function ConfigForm({ config }: { config: Config }) {
           <input type="checkbox" checked={refund} onChange={(e) => setRefund(e.target.checked)} />
           Devolver al saldo el tiempo no usado cuando una sesión se termina antes
         </label>
+        <fieldset className="schedule">
+          <legend>Horario de la arena (hora de Maracaibo)</legend>
+          <p className="form__lead">No se vende tiempo de juego que pase de la hora de cierre. Para cerrar a medianoche, pon 00:00.</p>
+          {DAYS.map(({ day, name }) => (
+            <div className="schedule__row" key={day}>
+              <span>{name}</span>
+              <input
+                type="time"
+                aria-label={`${name}: hora de apertura`}
+                value={toTime(hours[day][0])}
+                onChange={(e) => e.target.value && setHours(hours.map((h, i) => (i === day ? [fromTime(e.target.value, false), h[1]] : h)))}
+              />
+              <input
+                type="time"
+                aria-label={`${name}: hora de cierre`}
+                value={toTime(hours[day][1])}
+                onChange={(e) => e.target.value && setHours(hours.map((h, i) => (i === day ? [h[0], fromTime(e.target.value, true)] : h)))}
+              />
+            </div>
+          ))}
+          <Field label="Noche especial: extender el cierre hasta" hint="Para amaneceres o eventos. Déjalo vacío para usar el horario normal; se apaga solo al pasar esa hora.">
+            <input type="datetime-local" value={extended} onChange={(e) => setExtended(e.target.value)} />
+          </Field>
+        </fieldset>
         <fieldset className="levels">
           <legend>Niveles de fidelidad (nombre y visitas necesarias)</legend>
           {levels.map((level, i) => (

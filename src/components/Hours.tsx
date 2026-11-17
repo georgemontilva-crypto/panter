@@ -1,5 +1,5 @@
-import { dayNames, hours, reserveChannel, reserveUrl, site } from "../content";
-import { formatMinutes, localClock, openStatus, rangeLabel, useNow } from "../time";
+import { dayNames, reserveChannel, reserveUrl, site } from "../content";
+import { formatMinutes, getHours, localClock, openStatus, rangeLabel, useNow } from "../time";
 
 // El eje va de 12:00 pm a 12:00 am: cada día es una barra del tamaño de su horario.
 const AXIS_START = 12 * 60;
@@ -12,6 +12,7 @@ export default function Hours() {
   const now = useNow(30_000);
   const { day, minutes } = localClock(now);
   const status = openStatus(now);
+  const hours = getHours();
   const needle = minutes >= AXIS_START ? ((minutes - AXIS_START) / AXIS_SPAN) * 100 : null;
 
   return (
@@ -39,8 +40,10 @@ export default function Hours() {
             <ul className="week__rows">
               {ORDER.map((d) => {
                 const [open, close] = hours[d];
-                const left = ((open - AXIS_START) / AXIS_SPAN) * 100;
-                const width = ((close - open) / AXIS_SPAN) * 100;
+                // Si algún día abre antes del mediodía, la barra empieza en el borde del eje.
+                const from = Math.max(open, AXIS_START);
+                const left = ((from - AXIS_START) / AXIS_SPAN) * 100;
+                const width = (Math.max(0, close - from) / AXIS_SPAN) * 100;
                 const today = d === day;
                 return (
                   <li key={d} className={today ? "is-today" : undefined}>
