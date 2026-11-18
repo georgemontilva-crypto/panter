@@ -1,9 +1,9 @@
 // Panter Bloqueo: programa que corre en cada PC de la arena.
 // Cada 3 segundos pregunta al servidor qué debe hacer con esta máquina:
 //   bloqueada      -> pantalla de bloqueo con el número de la PC y el código para activarla
-//   activa         -> escritorio libre + contador pequeño en una esquina
+//   activa         -> pantalla de juegos (solo los juegos y apps de la arena) + contador en una esquina
 //   gracia         -> aviso grande: "se acabó tu tiempo, guarda tu partida" (minutos extra)
-//   mantenimiento  -> escritorio libre para el personal
+//   mantenimiento  -> escritorio normal de Windows para el personal
 // Si se cae el internet con una sesión en curso, sigue contando con la última hora de fin conocida.
 
 const { app, BrowserWindow, ipcMain, screen, shell } = require("electron");
@@ -12,6 +12,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawn, execFile, spawnSync } = require("node:child_process");
 const QRCode = require("qrcode");
+const games = require("./launcher");
 
 const POLL_MS = 3000;
 const OFFLINE_AFTER_MS = 15000;
@@ -23,6 +24,7 @@ const sha = (text) => crypto.createHash("sha256").update(String(text)).digest("h
 
 let config = null; // { serverUrl, token, pinHash }
 let lockWin = null;
+let launcherWin = null;
 let overlayWin = null;
 let setupWin = null;
 let quitting = false;
@@ -54,13 +56,18 @@ function saveConfig(next) {
 // ---------- Blindaje de Windows ----------
 // Dos piezas que hacen que la pantalla de bloqueo no tenga salida:
 //  1. keyblock.exe descarta la tecla Windows, Alt+Tab, Alt+F4 y Ctrl+Esc mientras la PC está bloqueada.
+//     Con un cliente jugando descarta solo la tecla Windows y Ctrl+Esc, y esconde la barra de tareas.
 //  2. Unas políticas de Windows para este usuario quitan el Administrador de tareas y dejan la
 //     pantalla de Ctrl+Alt+Supr sin "Bloquear", "Cerrar sesión" ni "Cambiar contraseña".
 // Todo es reversible: se quita al entrar en mantenimiento, al cerrar el programa con la clave
 // y al desinstalar. Fuera de Windows (pruebas) estas funciones no hacen nada.
 const IS_WINDOWS = process.platform === "win32";
 let guard = null;
-let guardLocked = false;
+// "lock" (PC bloqueada), "session" (cliente en la pantalla de juegos) o "unlock" (todo libre).
+let guardMode = "unlock";
+let taskbarHidden = false;
+let taskbarInfo = "sin datos";
+let taskbarSentAt = 0;
 let policiesOn = null;
 // "activo", o el motivo por el que las teclas del sistema no están protegidas.
 let guardStatus = IS_WINDOWS ? "sin iniciar" : "no aplica (no es Windows)";
@@ -79,7 +86,10 @@ function startGuard() {
     const child = spawn(guardPath(), [String(process.pid)], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     guardStatus = "iniciando";
     child.stdout.on("data", (chunk) => {
-      if (String(chunk).includes("ready")) guardStatus = "activo";
+      const text = String(chunk);
+      if (text.includes("ready")) guardStatus = "activo";
+      const taskbar = text.match(/taskbar (hidden|shown) (\d+)/);
+      if (taskbar) taskbarInfo = `${taskbar[1] === "hidden" ? "oculta" : "visible"} (${taskbar[2]} encontradas)`;
     });
     child.stderr.on("data", (chunk) => {
       guardStatus = `error: ${String(chunk).trim().slice(0, 60)}`;
@@ -95,25 +105,32 @@ function startGuard() {
     });
     child.stdin.on("error", () => {});
     guard = child;
-    child.stdin.write(guardLocked ? "lock\n" : "unlock\n");
+    child.stdin.write(`${guardMode}\n${taskbarHidden ? "taskbar-hide\n" : ""}`);
   } catch (error) {
     guard = null;
     guardStatus = `no arrancó: ${String(error.message).slice(0, 60)}`;
   }
 }
 
-/** true = descartar las teclas del sistema; false = dejar pasar todo. */
-function setKeyGuard(locked) {
+/** Qué teclas del sistema se descartan y si la barra de tareas queda escondida. */
+function setGuard(mode, hideTaskbar) {
   if (!IS_WINDOWS) return;
+  const wanted = mode !== "unlock" || hideTaskbar;
+  const modeChanged = mode !== guardMode;
+  const taskbarChanged = hideTaskbar !== taskbarHidden;
+  guardMode = mode;
+  taskbarHidden = hideTaskbar;
   if (!guard) {
-    guardLocked = locked;
-    if (locked) startGuard();
+    if (wanted) startGuard();
     return;
   }
-  if (locked === guardLocked) return;
-  guardLocked = locked;
   try {
-    guard.stdin.write(locked ? "lock\n" : "unlock\n");
+    if (modeChanged) guard.stdin.write(`${mode}\n`);
+    // Windows vuelve a mostrar la barra por su cuenta de vez en cuando: se insiste cada pocos segundos.
+    if (taskbarChanged || (hideTaskbar && Date.now() - taskbarSentAt > 4000)) {
+      taskbarSentAt = Date.now();
+      guard.stdin.write(hideTaskbar ? "taskbar-hide\n" : "taskbar-show\n");
+    }
   } catch {
     /* el ayudante murió: se relanza en el siguiente ciclo */
   }
@@ -122,10 +139,11 @@ function setKeyGuard(locked) {
 function stopGuard() {
   const child = guard;
   guard = null;
-  guardLocked = false;
+  guardMode = "unlock";
+  taskbarHidden = false;
   if (!child) return;
   try {
-    child.stdin.end("quit\n");
+    child.stdin.end("taskbar-show\nquit\n");
   } catch {
     /* ya estaba cerrado */
   }
@@ -167,10 +185,10 @@ function shutdown(code = 0) {
   for (const id of timers) clearInterval(id);
   try {
     if (guard) {
+      // No se mata: al recibir "quit" (o al ver que este programa terminó) devuelve la barra de tareas y sale solo.
       const child = guard;
       guard = null;
-      child.stdin.end("quit\n");
-      child.kill();
+      child.stdin.end("taskbar-show\nquit\n");
     }
   } catch {
     /* el ayudante ya no estaba */
@@ -269,6 +287,127 @@ function createOverlayWindow() {
   });
 }
 
+// ---------- Pantalla de juegos ----------
+// Con un cliente jugando, en vez del escritorio de Windows se muestra esta ventana a pantalla completa
+// con los juegos y las apps. No va "siempre encima": los juegos que se abren quedan delante de ella.
+function createLauncherWindow() {
+  launcherWin = new BrowserWindow({
+    show: false,
+    frame: false,
+    icon: ICON,
+    skipTaskbar: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    backgroundColor: "#000000",
+    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
+  });
+  launcherWin.setMenu(null);
+  launcherWin.loadFile(path.join(__dirname, "launcher.html"));
+  launcherWin.on("close", (event) => {
+    if (!quitting) event.preventDefault();
+  });
+  // Nada de enlaces ni ventanas nuevas desde aquí: lo único que se abre son los juegos de la lista.
+  launcherWin.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  launcherWin.webContents.on("will-navigate", (event) => event.preventDefault());
+  launcherWin.webContents.on("before-input-event", (event, input) => {
+    const combo = (input.control || input.alt || input.meta) && input.type === "keyDown";
+    if (combo && ["r", "w", "i", "f4"].includes(input.key.toLowerCase())) event.preventDefault();
+  });
+}
+
+function showLauncher() {
+  const target = screen.getPrimaryDisplay().bounds;
+  const now = launcherWin.getBounds();
+  if (now.x !== target.x || now.y !== target.y || now.width !== target.width || now.height !== target.height) launcherWin.setBounds(target);
+  if (!launcherWin.isVisible()) {
+    launcherWin.show();
+    launcherWin.focus();
+  }
+}
+
+function hideLauncher() {
+  if (launcherWin && !launcherWin.isDestroyed() && launcherWin.isVisible()) launcherWin.hide();
+}
+
+// Lo que se sabe de la pantalla de juegos:
+let detected = { games: [], apps: [], killDirs: [], where: games.places() }; // lo instalado en esta PC
+let panel = null; // lo que manda el panel: { enabled, signOut, hidden, apps }
+let panelVersion = "";
+let items = []; // la lista final que se muestra
+let startedPids = []; // programas que se arrancaron desde aquí en esta sesión
+let desktopForStaff = false; // el personal pidió el escritorio normal durante esta sesión
+let inSession = false;
+let lastCatalog = "";
+let lastCleanup = null;
+const panelFile = () => path.join(app.getPath("userData"), "launcher.json");
+const sessionMark = () => path.join(app.getPath("userData"), "sesion-abierta");
+/** Sin respuesta del panel todavía (o un servidor antiguo), la PC muestra el escritorio como antes. */
+const launcherOn = () => panel?.enabled === true;
+
+function rebuildItems() {
+  items = games.resolve(detected, panel);
+  if (launcherWin && !launcherWin.isDestroyed()) launcherWin.webContents.send("items", publicItems());
+}
+const publicItems = () => items.map((i) => ({ key: i.key, name: i.name, category: i.category, image: i.image, source: i.source }));
+
+function rescan() {
+  try {
+    detected = games.detect();
+  } catch (error) {
+    logError("detect", error);
+  }
+  rebuildItems();
+  void reportCatalog();
+}
+
+/** Le cuenta al panel qué juegos hay instalados aquí, para poder ocultarlos desde allá. Solo cuando cambia. */
+async function reportCatalog() {
+  if (!config) return;
+  const body = JSON.stringify({ items: detected.games.map((g) => ({ key: g.key, name: g.name })) });
+  if (body === lastCatalog) return;
+  try {
+    const response = await fetch(`${config.serverUrl}/api/agent/catalog`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${config.token}` },
+      body,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (response.ok) lastCatalog = body;
+  } catch {
+    /* sin conexión: se reintenta en el siguiente escaneo */
+  }
+}
+
+async function refreshPanel() {
+  try {
+    const response = await fetch(`${config.serverUrl}/api/agent/launcher`, {
+      headers: { authorization: `Bearer ${config.token}` },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) return false;
+    panel = await response.json();
+    fs.writeFileSync(panelFile(), JSON.stringify(panel));
+    rebuildItems();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Al terminar el tiempo: cerrar lo que quedó abierto y, si el panel lo pide, cerrar las sesiones de las apps. */
+function cleanSession() {
+  const snapshot = { detected, items: [...items], pids: [...startedPids], protect: guard ? [guard.pid] : [], doSignOut: panel?.signOut !== false };
+  startedPids = [];
+  games
+    .cleanup(snapshot)
+    .then((result) => {
+      lastCleanup = result;
+    })
+    .catch((error) => logError("cleanup", error))
+    .finally(() => fs.rmSync(sessionMark(), { force: true }));
+}
+
 function placeOverlay(big) {
   const { workArea } = screen.getPrimaryDisplay();
   const width = big ? Math.min(760, workArea.width - 40) : 300;
@@ -291,6 +430,7 @@ function showLock() {
   lockWin.setAlwaysOnTop(true, "screen-saver");
   if (!lockWin.isFocused()) lockWin.focus();
   if (overlayWin.isVisible()) overlayWin.hide();
+  hideLauncher();
   showCovers();
 }
 
@@ -332,6 +472,14 @@ function hideCovers() {
 
 function showDesktop(big) {
   hideLock();
+  hideLauncher();
+  placeOverlay(big);
+  if (!overlayWin.isVisible()) overlayWin.showInactive();
+}
+
+function showGames(big) {
+  hideLock();
+  showLauncher();
   placeOverlay(big);
   if (!overlayWin.isVisible()) overlayWin.showInactive();
 }
@@ -345,7 +493,7 @@ function currentView() {
   const base = { station: remote?.station ?? null, online, error: lastError, serverUrl: config.serverUrl, version: app.getVersion(), guard: guardStatus };
   const session = remote?.session;
   if (session && now < session.graceEndsAt) {
-    return { ...base, phase: now < session.endsAt ? "activa" : "gracia", session };
+    return { ...base, phase: now < session.endsAt ? "activa" : "gracia", session, games: launcherOn() && !desktopForStaff };
   }
   if (online && remote?.state === "mantenimiento") return { ...base, phase: "mantenimiento", unlockUntil: remote.unlockUntil };
   if (online && remote?.state === "deshabilitada") return { ...base, phase: "deshabilitada" };
@@ -359,22 +507,44 @@ function currentView() {
 }
 
 function render() {
-  if (quitting || lockWin.isDestroyed() || overlayWin.isDestroyed()) return;
+  if (quitting || lockWin.isDestroyed() || overlayWin.isDestroyed() || launcherWin.isDestroyed()) return;
   const view = currentView();
-  const unlocked = view.phase === "activa" || view.phase === "gracia" || view.phase === "mantenimiento";
+  const playing = view.phase === "activa" || view.phase === "gracia";
+  const unlocked = playing || view.phase === "mantenimiento";
+
+  // Empieza o termina una sesión: se revisa qué hay instalado, y al final se cierra lo que quedó abierto.
+  if (playing && !inSession) {
+    inSession = true;
+    desktopForStaff = false;
+    startedPids = [];
+    rescan();
+    if (launcherOn()) fs.writeFileSync(sessionMark(), String(Date.now()));
+  } else if (!playing && inSession) {
+    inSession = false;
+    desktopForStaff = false;
+    if (fs.existsSync(sessionMark())) cleanSession();
+  }
+
   if (view.phase === "configurar") {
     hideLock();
+    hideLauncher();
     if (overlayWin.isVisible()) overlayWin.hide();
     if (!setupWin) createSetupWindow();
   } else {
     if (setupWin) setupWin.destroy();
-    if (unlocked) showDesktop(view.phase === "gracia");
+    if (playing && view.games) showGames(view.phase === "gracia");
+    else if (unlocked) showDesktop(view.phase === "gracia");
     else showLock();
   }
   if (!quitting) {
-    // Teclas del sistema: solo se descartan con la pantalla de bloqueo puesta.
-    setKeyGuard(view.phase !== "configurar" && !unlocked);
-    if (!guard && guardLocked) startGuard();
+    // Teclas del sistema y barra de tareas:
+    //  - PC bloqueada: se descarta todo y la barra queda escondida.
+    //  - Cliente en la pantalla de juegos: se descarta la tecla Windows (Alt+Tab sigue sirviendo) y la barra sigue escondida.
+    //  - Mantenimiento, configuración o sin pantalla de juegos: Windows normal.
+    const gamesMode = playing && view.games;
+    const mode = view.phase === "configurar" || (unlocked && !gamesMode) ? "unlock" : gamesMode ? "session" : "lock";
+    setGuard(mode, mode !== "unlock");
+    if (!guard && mode !== "unlock") startGuard();
     // Políticas: activas siempre que la PC esté en servicio (bloqueada o con un cliente jugando),
     // para que nadie cierre este programa desde el Administrador de tareas. Se quitan en mantenimiento.
     setPolicies(view.phase !== "configurar" && view.phase !== "mantenimiento");
@@ -388,7 +558,7 @@ function render() {
   const payload = JSON.stringify(view);
   if (payload !== lastSent) {
     lastSent = payload;
-    for (const win of [lockWin, overlayWin, setupWin]) {
+    for (const win of [lockWin, overlayWin, setupWin, launcherWin]) {
       if (win && !win.isDestroyed()) win.webContents.send("view", view);
     }
   }
@@ -400,7 +570,7 @@ async function poll() {
     const response = await fetch(`${config.serverUrl}/api/agent/heartbeat`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${config.token}` },
-      body: JSON.stringify({ version: IS_WINDOWS && guardLocked && guardStatus !== "activo" ? `${app.getVersion()} sin-teclado` : app.getVersion() }),
+      body: JSON.stringify({ version: IS_WINDOWS && guardMode !== "unlock" && guardStatus !== "activo" ? `${app.getVersion()} sin-teclado` : app.getVersion() }),
       signal: AbortSignal.timeout(8000),
     });
     const data = await response.json();
@@ -425,6 +595,10 @@ async function poll() {
     };
     lastOkAt = Date.now();
     lastError = "";
+    // Cambió algo de la pantalla de juegos en el panel: se vuelve a pedir la lista.
+    // Un servidor que todavía no la conoce no manda nada, y la PC sigue mostrando el escritorio.
+    if (!data.launcher) panel = null;
+    else if (data.launcher.version !== panelVersion && (await refreshPanel())) panelVersion = data.launcher.version;
   } catch (error) {
     lastError = error.name === "TimeoutError" ? "El servidor no responde." : String(error.message || error);
   }
@@ -461,6 +635,13 @@ ipcMain.handle("setup", async (_event, input) => {
 // Desde la pantalla de bloqueo, Ctrl+Mayús+M pide la clave de mantenimiento.
 ipcMain.handle("maintenance", (_event, input) => {
   if (!config || sha(input.pin) !== config.pinHash) return { ok: false, error: "Clave incorrecta." };
+  // Durante una sesión, el personal puede pedir el escritorio normal de Windows hasta que esa sesión termine.
+  if (input.action === "desktop") {
+    desktopForStaff = true;
+    lastSent = "";
+    render();
+    return { ok: true };
+  }
   if (input.action === "reset") {
     stopGuard();
     setPolicies(false);
@@ -478,33 +659,159 @@ ipcMain.handle("maintenance", (_event, input) => {
 
 ipcMain.handle("view", () => currentView());
 
+// ---------- Pantalla de juegos: lista y abrir ----------
+ipcMain.handle("items", () => publicItems());
+
+let lastLaunch = { key: "", at: 0 };
+ipcMain.handle("launch", async (_event, key) => {
+  // La pantalla solo manda cuál quiere abrir; la ruta sale de la lista que arma este programa, nunca de la pantalla.
+  const item = items.find((i) => i.key === key);
+  if (!item || !inSession) return { ok: false, error: "Eso ya no está disponible." };
+  // Un juego tarda en aparecer: tocar dos veces seguidas no debe abrirlo dos veces.
+  if (lastLaunch.key === key && Date.now() - lastLaunch.at < 8000) return { ok: true };
+  lastLaunch = { key, at: Date.now() };
+  try {
+    const result = await games.launch(item, (url) => shell.openExternal(url), (file) => shell.openPath(file));
+    if (result.pid) startedPids.push(result.pid);
+    return { ok: result.ok, error: result.error };
+  } catch (error) {
+    logError("launch", error);
+    return { ok: false, error: "No se pudo abrir. Avisa en caja." };
+  }
+});
+
 // ---------- Arranque ----------
 // ---------- Autoprueba (solo en la compilación de GitHub) ----------
-// Con PANTER_SELFTEST=1 el programa arranca contra un servidor simulado, anota en selftest.json
-// cómo quedó la pantalla de bloqueo en un Windows real y después se cierra por el mismo camino
-// que el botón "Cerrar el programa" de mantenimiento. Si ese cierre falla, la compilación falla.
+// Con PANTER_SELFTEST=1 el programa arranca contra un servidor simulado y recorre una sesión entera
+// en un Windows real: bloqueada, cliente jugando con la pantalla de juegos, y bloqueada otra vez.
+// Anota en selftest.json lo que vio en cada momento y al final se cierra por el mismo camino que el
+// botón "Cerrar el programa" de mantenimiento. Si algo no cuadra, queda en "fallas" y la compilación falla.
 function runSelfTest() {
+  const report = { version: app.getVersion(), fallas: [] };
+  const check = (ok, what) => {
+    if (!ok) report.fallas.push(what);
+  };
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // Se admite 1 o 2 píxeles de diferencia: algunos escritorios redondean el tamaño de la ventana.
+  const sameBounds = (win) => {
+    const a = win.getBounds();
+    const b = screen.getPrimaryDisplay().bounds;
+    return ["x", "y", "width", "height"].every((k) => Math.abs(a[k] - b[k]) <= 2);
+  };
+  const fixtures = process.env.PANTER_FIXTURES || "";
+  let fakeGame = null;
+
+  // 1. Bloqueada
   setTimeout(() => {
     let taskManagerPolicy = null;
     if (IS_WINDOWS) {
       const query = spawnSync("reg.exe", ["query", POLICIES[0][0], "/v", POLICIES[0][1]], { encoding: "utf8", windowsHide: true });
       taskManagerPolicy = query.status === 0 && /0x1/.test(query.stdout || "");
     }
-    const report = {
-      version: app.getVersion(),
+    report.bloqueada = {
       phase: currentView().phase,
       lockVisible: lockWin.isVisible(),
       kiosk: lockWin.isKiosk(),
       focused: lockWin.isFocused(),
       bounds: lockWin.getBounds(),
       display: screen.getPrimaryDisplay().bounds,
+      launcherVisible: launcherWin.isVisible(),
       guard: guardStatus,
+      guardMode,
+      taskbar: taskbarInfo,
       taskManagerPolicy,
     };
+    check(report.bloqueada.phase === "bloqueada" && report.bloqueada.lockVisible && !report.bloqueada.launcherVisible, "al arrancar debe verse la pantalla de bloqueo y no la de juegos");
+  }, 7000);
+
+  // 2. Cliente jugando: pantalla de juegos
+  setTimeout(async () => {
+    const shown = publicItems().map((i) => i.key);
+    report.jugando = {
+      phase: currentView().phase,
+      games: currentView().games,
+      launcherVisible: launcherWin.isVisible(),
+      launcherCoversScreen: sameBounds(launcherWin),
+      lockVisible: lockWin.isVisible(),
+      overlayVisible: overlayWin.isVisible(),
+      guardMode,
+      taskbar: taskbarInfo,
+      items: shown,
+    };
+    check(report.jugando.phase === "activa" && report.jugando.launcherVisible && !report.jugando.lockVisible, "con un cliente jugando debe verse la pantalla de juegos y no la de bloqueo");
+    check(report.jugando.launcherCoversScreen, "la pantalla de juegos debe cubrir toda la pantalla");
+    if (IS_WINDOWS) check(guardMode === "session", "con un cliente jugando el teclado debe estar en modo sesión");
+    if (fixtures) {
+      check(shown.includes("steam:730") && shown.includes("epic:Fortnite"), "debe detectar los juegos de Steam y Epic instalados");
+      check(!shown.includes("steam:570"), "un juego oculto desde el panel no debe aparecer");
+      check(!shown.includes("steam:228980") && !shown.includes("epic:FortniteExtra"), "no deben aparecer redistribuibles ni contenido adicional");
+      check(shown.includes("base:steam") && shown.includes("app:1") && !shown.includes("app:2"), "debe mostrar Steam y la app del panel que sí está instalada, no la que falta");
+      // Se abre un juego desde la propia pantalla, y se simula otro que habría abierto Steam.
+      report.jugando.launch = await launcherWin.webContents.executeJavaScript('window.panter.launch("app:1")').catch((error) => ({ ok: false, error: String(error) }));
+      check(report.jugando.launch.ok && startedPids.length === 1, "el juego de prueba debe abrirse desde la pantalla");
+      const cs2 = path.join(fixtures, "steam", "steamapps", "common", "Counter-Strike Global Offensive", "cs2.exe");
+      fakeGame = spawn(cs2, ["-e", "setTimeout(() => {}, 600000)"], { detached: true, stdio: "ignore" });
+      fakeGame.unref();
+      report.jugando.pids = [startedPids[0], fakeGame.pid];
+    }
+  }, 16000);
+
+  setTimeout(() => {
+    if (!fixtures) return;
+    report.jugando.vivosAntes = (report.jugando.pids || []).map(alive);
+    check(report.jugando.vivosAntes.length === 2 && report.jugando.vivosAntes.every(Boolean), "los dos juegos deben seguir abiertos mientras hay tiempo");
+  }, 22000);
+
+  // 3. Se acabó el tiempo: bloqueo y limpieza. Después, cerrar con la clave.
+  setTimeout(async () => {
+    const text = (file) => {
+      try {
+        return fs.readFileSync(file, "utf8");
+      } catch {
+        return null;
+      }
+    };
+    report.alTerminar = {
+      phase: currentView().phase,
+      lockVisible: lockWin.isVisible(),
+      launcherVisible: launcherWin.isVisible(),
+      guardMode,
+      limpieza: lastCleanup,
+    };
+    check(report.alTerminar.phase === "bloqueada" && report.alTerminar.lockVisible && !report.alTerminar.launcherVisible, "al terminar el tiempo debe volver la pantalla de bloqueo");
+    if (fixtures) {
+      report.alTerminar.vivosDespues = (report.jugando.pids || []).map(alive);
+      check(report.alTerminar.vivosDespues.every((v) => !v), "al terminar el tiempo los juegos abiertos deben cerrarse");
+      const steamLogin = text(path.join(fixtures, "steam", "config", "loginusers.vdf")) || "";
+      const epic = text(path.join(fixtures, "epic", "GameUserSettings.ini")) || "";
+      report.alTerminar.steamSinSesion = /"AllowAutoLogin"\s+"0"/.test(steamLogin) && /"RememberPassword"\s+"0"/.test(steamLogin) && steamLogin.includes('"AccountName"');
+      report.alTerminar.epicSinSesion = /Enable=False/.test(epic) && /^Data=$/m.test(epic) && epic.includes("Idioma=es");
+      report.alTerminar.discordSinSesion = !fs.existsSync(path.join(fixtures, "discord-data", "Local Storage", "leveldb"));
+      check(report.alTerminar.steamSinSesion, "la sesión de Steam debe quedar cerrada");
+      check(report.alTerminar.epicSinSesion, "la sesión de Epic debe quedar cerrada sin dañar el resto del archivo");
+      check(report.alTerminar.discordSinSesion, "la sesión de Discord debe quedar cerrada");
+      check(!fs.existsSync(sessionMark()), "no debe quedar la marca de sesión abierta");
+      try {
+        const state = await (await fetch(`${config.serverUrl}/selftest/state`)).json();
+        report.alTerminar.catalogo = state.catalog;
+        const keys = (state.catalog || []).map((c) => c.key).sort();
+        check(JSON.stringify(keys) === JSON.stringify(["epic:Fortnite", "steam:570", "steam:730"]), "la PC debe avisar al panel qué juegos tiene instalados (incluido el oculto)");
+      } catch (error) {
+        check(false, `no se pudo consultar el servidor de prueba: ${error.message}`);
+      }
+    }
+    if (fakeGame && alive(fakeGame.pid)) process.kill(fakeGame.pid);
     fs.writeFileSync(path.join(app.getPath("userData"), "selftest.json"), JSON.stringify(report, null, 2));
     // Se pulsa "Cerrar el programa" desde la propia pantalla de bloqueo, con la clave de prueba.
     lockWin.webContents.executeJavaScript('window.panter.maintenance({ pin: "1234", action: "quit" })').catch((error) => logError("selftest", error));
-  }, 8000);
+  }, 46000);
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -516,7 +823,19 @@ if (!app.requestSingleInstanceLock()) {
     // Se reafirma en cada arranque por si alguien lo quitó de los programas de inicio.
     if (config && app.isPackaged) app.setLoginItemSettings({ openAtLogin: true });
     createLockWindow();
+    createLauncherWindow();
     createOverlayWindow();
+    // Lo último que mandó el panel, por si la PC arranca sin internet.
+    try {
+      panel = JSON.parse(fs.readFileSync(panelFile(), "utf8"));
+    } catch {
+      panel = null;
+    }
+    rescan();
+    // Si la PC se apagó a mitad de una sesión, al arrancar se limpia lo que haya quedado de ese cliente.
+    if (fs.existsSync(sessionMark())) cleanSession();
+    // Cada 10 minutos se vuelve a mirar qué hay instalado (alguien pudo instalar un juego en mantenimiento).
+    timers.push(setInterval(() => !inSession && rescan(), 10 * 60 * 1000));
     lockWin.once("ready-to-show", () => render());
     poll();
     timers.push(setInterval(poll, POLL_MS));

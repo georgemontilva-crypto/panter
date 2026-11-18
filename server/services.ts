@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import { db, type Tx } from "./db";
-import { KITCHEN_STATES, PAY_METHODS, ROLES, STATION_KINDS, TX_TYPES, orderItems, orders, products, sessions, settings, stations, timeCredits, users, visits, walletTx } from "./db/schema";
+import { KITCHEN_STATES, PAY_METHODS, ROLES, STATION_KINDS, TX_TYPES, launcherApps, orderItems, orders, products, sessions, settings, stations, timeCredits, users, visits, walletTx } from "./db/schema";
 import { hours as defaultHours } from "../src/content";
 import { closingAt, closingProblem, sellableMinutes, type WeekHours } from "./closing";
 import { MINUTE, caracasDate, fail, newCardToken, newMemberCode, newPairCode, now } from "./lib";
@@ -95,6 +95,43 @@ export async function getConfig(): Promise<Config> {
 export async function saveConfig(config: Config) {
   const value = JSON.stringify(config);
   await db.insert(settings).values({ key: "config", value }).onDuplicateKeyUpdate({ set: { value } });
+}
+
+// ---------- Pantalla de juegos de las PC ----------
+export type LauncherSettings = {
+  /** Con la pantalla de juegos, el cliente no ve el escritorio de Windows: solo sus juegos y apps. */
+  enabled: boolean;
+  /** Al terminar el tiempo, además de cerrar los juegos, intentar cerrar la sesión de Steam, Epic y Discord. */
+  signOut: boolean;
+  /** Juegos detectados que no se quieren mostrar ("steam:730", "epic:Fortnite"). */
+  hidden: string[];
+};
+const DEFAULT_LAUNCHER: LauncherSettings = { enabled: true, signOut: true, hidden: [] };
+
+export async function getLauncherSettings(): Promise<LauncherSettings> {
+  const [row] = await db.select().from(settings).where(eq(settings.key, "launcher"));
+  return row ? { ...DEFAULT_LAUNCHER, ...(JSON.parse(row.value) as Partial<LauncherSettings>) } : DEFAULT_LAUNCHER;
+}
+export async function saveLauncherSettings(next: LauncherSettings) {
+  const value = JSON.stringify(next);
+  await db.insert(settings).values({ key: "launcher", value }).onDuplicateKeyUpdate({ set: { value } });
+}
+
+// Qué se acepta como destino de una app: una ruta de Windows a un programa, o un enlace de un lanzador conocido.
+// El programa de la PC ejecuta esto tal cual, así que no se acepta cualquier cosa.
+const TARGET_PATH = /^(?:[a-zA-Z]:\\|%[A-Za-z0-9_()]+%\\)[^<>"|?*&;^`%\r\n]+\.(?:exe|lnk|url)$/i;
+const TARGET_LINK = /^(?:steam|com\.epicgames\.launcher|discord|minecraft|roblox|roblox-player|battlenet|uplay|origin2|https):\/\/[^\s"<>]+$/i;
+export const isLauncherTarget = (target: string) => (TARGET_PATH.test(target) && !target.includes("..\\")) || TARGET_LINK.test(target);
+
+/** Lo que el programa de cada PC necesita para armar su pantalla de juegos. */
+export async function launcherForAgent() {
+  const [config, apps] = await Promise.all([getLauncherSettings(), db.select().from(launcherApps).where(eq(launcherApps.active, true)).orderBy(launcherApps.name)]);
+  return {
+    enabled: config.enabled,
+    signOut: config.signOut,
+    hidden: config.hidden,
+    apps: apps.map((a) => ({ key: `app:${a.id}`, name: a.name, category: a.category, target: a.target, args: a.args, image: a.imageUrl })),
+  };
 }
 
 export function levelFor(config: Config, visitsCount: number) {

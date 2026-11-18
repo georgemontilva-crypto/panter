@@ -2718,3 +2718,13 @@
     flex-wrap: wrap;
   }
 }
+
+/* Ajustes: subtítulos dentro de un panel largo */
+.admin .panel > h3 {
+  margin: 22px 0 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+.admin .bills__main small {
+  overflow-wrap: anywhere;
+}

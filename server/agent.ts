@@ -1,9 +1,10 @@
-import { Router } from "express";
+import { createHash } from "node:crypto";
+import { Router, type Request, type Response } from "express";
 import { and, eq, gt } from "drizzle-orm";
 import { db } from "./db";
 import { sessions, stations, users } from "./db/schema";
 import { MINUTE, newPairCode, now, sha256 } from "./lib";
-import { finalizeExpired, stationLabel } from "./services";
+import { finalizeExpired, launcherForAgent, stationLabel } from "./services";
 
 // API del programa de bloqueo de cada PC.
 // El programa llama a /api/agent/heartbeat cada pocos segundos con su credencial
@@ -12,18 +13,45 @@ export const agentRouter = Router();
 
 const PAIR_CODE_ROTATE = 3 * MINUTE;
 
-agentRouter.post("/heartbeat", async (req, res) => {
+type Station = typeof stations.$inferSelect;
+/** La PC que llama, según su credencial. Si no es válida, responde el error y devuelve null. */
+async function stationOf(req: Request, res: Response): Promise<Station | null> {
   const header = req.headers.authorization ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
   if (!token) {
     res.status(401).json({ error: "Falta la credencial de la PC." });
-    return;
+    return null;
   }
   const [station] = await db.select().from(stations).where(eq(stations.deviceTokenHash, sha256(token)));
   if (!station) {
     res.status(401).json({ error: "Credencial inválida. Genera una nueva en el panel de administración." });
-    return;
+    return null;
   }
+  return station;
+}
+
+// Pantalla de juegos: lo que la PC debe mostrar. El programa lo vuelve a pedir cuando cambia "launcher.version" en el latido.
+agentRouter.get("/launcher", async (req, res) => {
+  if (!(await stationOf(req, res))) return;
+  res.json(await launcherForAgent());
+});
+
+// La PC cuenta qué juegos de Steam y Epic encontró instalados, para poder ocultarlos desde el panel.
+agentRouter.post("/catalog", async (req, res) => {
+  const station = await stationOf(req, res);
+  if (!station) return;
+  const raw: unknown[] = Array.isArray(req.body?.items) ? req.body.items.slice(0, 400) : [];
+  const items = raw
+    .filter((item): item is { key?: unknown; name?: unknown } => typeof item === "object" && item !== null)
+    .filter((item) => typeof item.key === "string" && typeof item.name === "string" && /^(steam|epic):[\w.-]{1,80}$/.test(item.key))
+    .map((item) => ({ key: item.key as string, name: (item.name as string).slice(0, 120), source: (item.key as string).split(":")[0] }));
+  await db.update(stations).set({ catalog: JSON.stringify(items), catalogAt: now() }).where(eq(stations.id, station.id));
+  res.json({ ok: true, count: items.length });
+});
+
+agentRouter.post("/heartbeat", async (req, res) => {
+  const station = await stationOf(req, res);
+  if (!station) return;
 
   await finalizeExpired();
   const t = now();
@@ -46,8 +74,13 @@ agentRouter.post("/heartbeat", async (req, res) => {
   else if (session) state = t < session.endsAt ? "activa" : "gracia";
   else if (station.unlockUntil && station.unlockUntil > t) state = "mantenimiento";
 
+  // Huella de la configuración de la pantalla de juegos: si cambia, el programa vuelve a pedir la lista.
+  const launcher = await launcherForAgent();
+  const launcherVersion = createHash("sha256").update(JSON.stringify(launcher)).digest("hex").slice(0, 12);
+
   res.json({
     serverTime: t,
+    launcher: { enabled: launcher.enabled, version: launcherVersion },
     station: { number: station.number, label: stationLabel(station) },
     state,
     // Solo se muestra con la PC bloqueada: es lo que el cliente escribe en su perfil para activarla.

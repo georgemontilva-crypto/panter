@@ -361,6 +361,178 @@ function ProductsAdmin() {
 }
 
 // ---------- Personal ----------
+// ---------- Pantalla de juegos de las PC ----------
+type LauncherApp = { id: number; name: string; category: "juego" | "app"; target: string; args: string | null; imageUrl: string | null; active: boolean };
+const SOURCE_LABEL: Record<string, string> = { steam: "Steam", epic: "Epic Games" };
+
+function LauncherAppForm({ app, onDone }: { app?: LauncherApp; onDone?: () => void }) {
+  const utils = trpc.useUtils();
+  const empty = { name: "", category: "juego" as "juego" | "app", target: "", args: "", imageUrl: "" };
+  const [form, setForm] = useState(app ? { name: app.name, category: app.category, target: app.target, args: app.args ?? "", imageUrl: app.imageUrl ?? "" } : empty);
+  const save = trpc.admin.launcherAppSave.useMutation({
+    onSuccess: () => {
+      if (!app) setForm(empty);
+      return utils.admin.launcher.invalidate().then(() => onDone?.());
+    },
+  });
+  const set = (key: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [key]: e.target.value }));
+  return (
+    <form
+      className="form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save.mutate({ id: app?.id, ...form, active: app?.active ?? true });
+      }}
+    >
+      <div className="form__pair">
+        <Field label="Nombre">
+          <input value={form.name} onChange={set("name")} placeholder="Valorant" required />
+        </Field>
+        <Field label="Se muestra en">
+          <select value={form.category} onChange={set("category")}>
+            <option value="juego">Juegos</option>
+            <option value="app">Apps</option>
+          </select>
+        </Field>
+      </div>
+      <Field label="Dónde está el programa" hint="La ruta completa en la PC, o el enlace del lanzador. Si una PC no lo tiene instalado, ahí no aparece.">
+        <input value={form.target} onChange={set("target")} placeholder="C:\Riot Games\Riot Client\RiotClientServices.exe" autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
+      </Field>
+      <div className="form__pair">
+        <Field label="Opciones al abrir (opcional)">
+          <input value={form.args} onChange={set("args")} placeholder="--launch-product=valorant" autoCapitalize="none" spellCheck={false} />
+        </Field>
+        <Field label="Imagen de portada (opcional)" hint="Un enlace https a una imagen vertical.">
+          <input value={form.imageUrl} onChange={set("imageUrl")} placeholder="https://…" autoCapitalize="none" spellCheck={false} />
+        </Field>
+      </div>
+      <Notice>{save.error?.message}</Notice>
+      <div className="form__actions">
+        <button className="btn btn--small" type="submit" disabled={save.isPending}>
+          {app ? "Guardar cambios" : "Agregar a la pantalla de juegos"}
+        </button>
+        {app && (
+          <button className="btn btn--ghost btn--small" type="button" onClick={onDone}>
+            Cancelar
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
+
+function LauncherAdmin() {
+  const utils = trpc.useUtils();
+  const data = trpc.admin.launcher.useQuery(undefined, { refetchInterval: 30_000 });
+  const refresh = { onSuccess: () => utils.admin.launcher.invalidate() };
+  const saveSettings = trpc.admin.launcherSave.useMutation(refresh);
+  const hide = trpc.admin.launcherHide.useMutation(refresh);
+  const saveApp = trpc.admin.launcherAppSave.useMutation(refresh);
+  const remove = trpc.admin.launcherAppRemove.useMutation(refresh);
+  const [editing, setEditing] = useState<number | null>(null);
+  const d = data.data;
+  if (!d) return <Panel title="Pantalla de juegos de las PC">{data.error ? <Notice>{data.error.message}</Notice> : <p className="empty">Cargando…</p>}</Panel>;
+
+  return (
+    <Panel title="Pantalla de juegos de las PC">
+      <p className="panel__lead">
+        Al desbloquearse una PC, el cliente no ve el escritorio de Windows: ve una pantalla de Panter con los juegos y las apps. Lo de Steam y Epic lo
+        encuentra cada PC sola; aquí agregas lo demás y ocultas lo que no quieras mostrar.
+      </p>
+      <label className="check">
+        <input type="checkbox" checked={d.enabled} disabled={saveSettings.isPending} onChange={(e) => saveSettings.mutate({ enabled: e.target.checked, signOut: d.signOut })} />
+        Mostrar la pantalla de juegos en vez del escritorio de Windows
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={d.signOut} disabled={saveSettings.isPending} onChange={(e) => saveSettings.mutate({ enabled: d.enabled, signOut: e.target.checked })} />
+        Al terminar el tiempo, cerrar también la sesión de Steam, Epic y Discord (para que el siguiente cliente no encuentre la cuenta del anterior)
+      </label>
+      <Notice>{saveSettings.error?.message ?? hide.error?.message ?? saveApp.error?.message ?? remove.error?.message}</Notice>
+
+      <h3>Agregar un juego o una app</h3>
+      <LauncherAppForm />
+
+      {d.apps.length > 0 && (
+        <>
+          <h3>Agregados a mano</h3>
+          <ul className="bills">
+            {d.apps.map((a) =>
+              editing === a.id ? (
+                <li key={a.id} className="bills__edit">
+                  <LauncherAppForm app={a} onDone={() => setEditing(null)} />
+                </li>
+              ) : (
+                <li key={a.id}>
+                  <div className="bills__main">
+                    <strong>{a.name}</strong>
+                    <small>{a.target}</small>
+                  </div>
+                  <div className="bills__side">
+                    <Badge tone={a.active ? "ok" : "off"}>{a.active ? (a.category === "app" ? "En Apps" : "En Juegos") : "Oculto"}</Badge>
+                  </div>
+                  <div className="bills__actions">
+                    <button className="app__link" type="button" onClick={() => setEditing(a.id)}>
+                      Editar
+                    </button>
+                    <button className="app__link" type="button" disabled={saveApp.isPending} onClick={() => saveApp.mutate({ ...a, args: a.args ?? "", imageUrl: a.imageUrl ?? "", active: !a.active })}>
+                      {a.active ? "Ocultar" : "Volver a mostrar"}
+                    </button>
+                    <button
+                      className="app__link"
+                      type="button"
+                      disabled={remove.isPending}
+                      onClick={() => {
+                        if (window.confirm(`¿Quitar "${a.name}" de la pantalla de juegos?`)) remove.mutate({ id: a.id });
+                      }}
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                </li>
+              ),
+            )}
+          </ul>
+        </>
+      )}
+
+      <h3>Encontrados en las PC</h3>
+      {d.detected.length === 0 ? (
+        <p className="empty">
+          {d.reportingPcs === 0
+            ? "Todavía ninguna PC ha reportado sus juegos. Aparecen aquí cuando el programa de bloqueo (versión 0.3.0 o más nueva) está instalado y encendido."
+            : "Las PC no tienen juegos de Steam ni de Epic instalados."}
+        </p>
+      ) : (
+        <>
+          <p className="form__lead">
+            {d.reportingPcs} de {d.totalPcs} PC han reportado sus juegos. Lo que ocultes aquí deja de mostrarse en todas.
+          </p>
+          <ul className="bills">
+            {d.detected.map((g) => (
+              <li key={g.key}>
+                <div className="bills__main">
+                  <strong>{g.name}</strong>
+                  <small>
+                    {SOURCE_LABEL[g.source] ?? g.source}, instalado en {g.pcs} PC
+                  </small>
+                </div>
+                <div className="bills__side">
+                  <Badge tone={g.hidden ? "off" : "ok"}>{g.hidden ? "Oculto" : "Se muestra"}</Badge>
+                </div>
+                <div className="bills__actions">
+                  <button className="app__link" type="button" disabled={hide.isPending} onClick={() => hide.mutate({ key: g.key, hidden: !g.hidden })}>
+                    {g.hidden ? "Volver a mostrar" : "Ocultar"}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </Panel>
+  );
+}
+
 type StaffRole = Exclude<Role, "member">;
 const STAFF_ROLES: StaffRole[] = ["cashier", "kitchen", "admin", "owner"];
 
@@ -588,6 +760,7 @@ export default function Admin() {
       {config.data ? <ConfigForm config={config.data} /> : <p className="empty">Cargando…</p>}
       <ProductsAdmin />
       <StationsAdmin />
+      <LauncherAdmin />
       <StaffAdmin />
       <MembersAdmin />
     </div>

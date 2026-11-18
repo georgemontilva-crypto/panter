@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+    <title>Arena Panter</title>
+    <style>
+      /* Pantalla de juegos: lo único que el cliente ve de la PC mientras juega. */
+      * { box-sizing: border-box; margin: 0; }
+      html, body { height: 100%; }
+      body {
+        overflow: hidden; cursor: default; user-select: none;
+        background: radial-gradient(70% 55% at 85% 0%, rgba(165, 15, 26, 0.42), transparent 70%), #050102;
+        color: #f6eeea; font-family: "Bahnschrift", "Segoe UI", system-ui, sans-serif; font-stretch: 87.5%;
+      }
+      [hidden] { display: none !important; }
+      .page { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; }
+
+      /* La esquina de arriba a la derecha queda libre: ahí va el contador de tiempo, que flota encima de todo. */
+      .top { display: flex; align-items: center; gap: 2vw; padding: 3vh 340px 2vh 3.2vw; }
+      .mark { height: 9vh; filter: drop-shadow(0 0 3vh rgba(255, 43, 28, 0.6)); }
+      .station { font-stretch: 75%; font-weight: 700; font-size: 6.4vh; line-height: 0.95; text-transform: uppercase; }
+      .hello { margin-top: 0.6vh; font-size: 2.3vh; color: #c9b8b4; }
+      .find { margin-left: auto; width: min(26vw, 380px); padding: 1.3vh 1.1vw; font: inherit; font-size: 2.1vh; color: #f6eeea; background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(246, 238, 234, 0.3); }
+      .find::placeholder { color: #8d7c78; }
+      .find:focus-visible { outline: 2px solid #ff2b1c; border-color: #ff2b1c; }
+
+      .scroll { overflow-y: auto; padding: 1vh 3.2vw 3vh; }
+      .scroll::-webkit-scrollbar { width: 12px; }
+      .scroll::-webkit-scrollbar-thumb { background: rgba(255, 43, 28, 0.55); }
+      h2 { margin: 2.2vh 0 1.6vh; font-stretch: 75%; font-weight: 700; font-size: 2.9vh; text-transform: uppercase; color: #ff6a3d; }
+      h2 span { margin-left: 0.6em; font-weight: 400; color: #8d7c78; }
+
+      .games { display: grid; grid-template-columns: repeat(auto-fill, minmax(clamp(140px, 10.4vw, 230px), 1fr)); gap: 2.2vh 1.3vw; }
+      .tile { display: grid; gap: 1vh; padding: 0; text-align: left; font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+      .art { position: relative; display: grid; place-items: center; aspect-ratio: 2 / 3; overflow: hidden; background: #1e0a0e; border: 2px solid transparent; transition: transform 0.14s, border-color 0.14s, box-shadow 0.14s; }
+      .art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      /* Sin carátula: el nombre del juego hace de portada. */
+      .art b { position: relative; padding: 0 10%; font-stretch: 75%; font-weight: 700; font-size: clamp(18px, 2.6vh, 34px); line-height: 1.02; text-align: center; text-transform: uppercase; overflow-wrap: anywhere; }
+      .tile:hover .art, .tile:focus-visible .art { transform: translateY(-0.6vh); border-color: #ff2b1c; box-shadow: 0 2.4vh 4vh -1.6vh rgba(255, 43, 28, 0.7); }
+      .tile:focus-visible { outline: none; }
+      .name { font-size: 2vh; font-weight: 600; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .from { margin-top: -0.6vh; font-size: 1.6vh; color: #8d7c78; }
+      .tile.opening .art::after { content: "Abriendo…"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 2.2vh; font-weight: 700; background: rgba(0, 0, 0, 0.74); }
+      .tile.opening { pointer-events: none; }
+
+      .apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(clamp(200px, 15vw, 300px), 1fr)); gap: 1.4vh 1.3vw; }
+      .app { display: flex; align-items: center; gap: 1.1vw; min-height: 8.4vh; padding: 1.2vh 1.2vw; text-align: left; font: inherit; color: inherit; background: rgba(246, 238, 234, 0.07); border: 2px solid transparent; cursor: pointer; transition: border-color 0.14s, background 0.14s; }
+      .app:hover, .app:focus-visible { border-color: #ff2b1c; background: rgba(255, 43, 28, 0.16); outline: none; }
+      .app i { display: grid; place-items: center; flex: none; width: 5.6vh; height: 5.6vh; font-style: normal; font-stretch: 75%; font-weight: 700; font-size: 3vh; color: #000; background: #ff2b1c; }
+      .app span { font-size: 2.3vh; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .app.opening { opacity: 0.6; pointer-events: none; }
+      .empty { max-width: 34em; padding: 6vh 0; font-size: 2.5vh; line-height: 1.45; color: #c9b8b4; }
+
+      .foot { display: flex; align-items: center; justify-content: space-between; gap: 2vw; padding: 1.4vh 3.2vw; font-size: 1.8vh; color: #8d7c78; border-top: 1px solid rgba(246, 238, 234, 0.12); }
+      .foot kbd { padding: 0.2em 0.5em; font: inherit; color: #c9b8b4; border: 1px solid rgba(246, 238, 234, 0.3); }
+      .staff { padding: 0.9vh 1vw; font: inherit; font-size: 1.6vh; font-weight: 600; color: #b8a7a3; background: rgba(246, 238, 234, 0.08); border: 0; cursor: pointer; }
+      .staff:hover { color: #f6eeea; background: rgba(246, 238, 234, 0.16); }
+      .toast { position: fixed; left: 50%; bottom: 9vh; transform: translateX(-50%); padding: 1.6vh 2vw; font-size: 2.2vh; font-weight: 600; background: #7a0810; border: 1px solid #ff2b1c; }
+
+      .veil { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.82); }
+      form { display: grid; gap: 14px; width: min(92vw, 560px); padding: 28px; background: #12060a; border: 1px solid rgba(255, 43, 28, 0.4); user-select: text; }
+      form h1 { font-size: 26px; text-transform: uppercase; }
+      form p { font-size: 15px; line-height: 1.45; color: #c9b8b4; }
+      label { display: grid; gap: 6px; font-size: 14px; font-weight: 600; }
+      form input { padding: 11px 12px; font: inherit; font-size: 16px; color: #f6eeea; background: #050203; border: 1px solid rgba(246, 238, 234, 0.3); }
+      form input:focus-visible { outline: 2px solid #ff2b1c; }
+      form button { padding: 13px 18px; font: inherit; font-size: 16px; font-weight: 700; color: #000; background: #ff2b1c; border: 0; cursor: pointer; }
+      form button.ghost { color: #f6eeea; background: rgba(246, 238, 234, 0.12); }
+      form button:focus-visible { outline: 2px solid #f6eeea; outline-offset: 2px; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; }
+      .error { font-size: 15px; color: #ff8a7a; min-height: 1.3em; }
+      @media (prefers-reduced-motion: reduce) { .art, .app { transition: none; } }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="top">
+        <img class="mark" src="mark.svg" alt="Arena Panter" />
+        <div>
+          <p class="station" id="station">PC</p>
+          <p class="hello" id="hello"></p>
+        </div>
+        <input class="find" id="find" type="search" placeholder="Buscar un juego" aria-label="Buscar un juego" hidden />
+      </header>
+
+      <main class="scroll" id="scroll">
+        <section id="gamesBox" hidden>
+          <h2>Juegos <span id="gamesCount"></span></h2>
+          <div class="games" id="games"></div>
+        </section>
+        <section id="appsBox" hidden>
+          <h2>Apps</h2>
+          <div class="apps" id="apps"></div>
+        </section>
+        <p class="empty" id="empty" hidden></p>
+      </main>
+
+      <footer class="foot">
+        <span><kbd>Alt</kbd> + <kbd>Tab</kbd> cambia entre tu juego y esta pantalla. Al terminar tu tiempo, lo que esté abierto se cierra: guarda tu partida antes.</span>
+        <button type="button" class="staff" id="staffBtn">Mantenimiento</button>
+      </footer>
+    </div>
+
+    <p class="toast" id="toast" role="alert" hidden></p>
+
+    <!-- Solo para el personal: escritorio normal durante esta sesión, o cerrar el programa -->
+    <div class="veil" id="veil" hidden>
+      <form id="maint">
+        <h1>Mantenimiento</h1>
+        <p>Con la clave puedes mostrar el escritorio normal de Windows hasta que termine esta sesión.</p>
+        <label>Clave de mantenimiento <input id="maintPin" type="password" required /></label>
+        <p class="error" id="maintError"></p>
+        <div class="row">
+          <button type="submit" data-action="desktop">Mostrar el escritorio</button>
+          <button type="submit" class="ghost" data-action="quit">Cerrar el programa</button>
+          <button type="button" class="ghost" id="maintCancel">Cancelar</button>
+        </div>
+      </form>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const FROM = { steam: "Steam", epic: "Epic Games" };
+      // Portadas sin imagen: cada juego recibe siempre el mismo par de colores de la arena.
+      const COVERS = [["#a50f1a", "#12060a"], ["#ff2b1c", "#5a0a10"], ["#5b1fa8", "#12060a"], ["#ff6a3d", "#7a0810"], ["#c4127f", "#1e0a0e"], ["#3a2a2a", "#a50f1a"]];
+      let items = [];
+      let view = null;
+      let query = "";
+
+      const coverOf = (name) => {
+        let sum = 0;
+        for (const ch of name) sum = (sum * 31 + ch.codePointAt(0)) % 9973;
+        const [a, b] = COVERS[sum % COVERS.length];
+        return `linear-gradient(150deg, ${a}, ${b})`;
+      };
+
+      function tile(item) {
+        const game = item.category === "juego";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.key = item.key;
+        if (game) {
+          button.className = "tile";
+          const art = document.createElement("span");
+          art.className = "art";
+          art.style.background = coverOf(item.name);
+          const title = document.createElement("b");
+          title.textContent = item.name;
+          art.append(title);
+          if (item.image) {
+            const img = document.createElement("img");
+            img.alt = "";
+            img.loading = "lazy";
+            // Si la carátula no carga (sin internet, o el juego no tiene), queda el nombre como portada.
+            img.addEventListener("error", () => img.remove());
+            img.src = item.image;
+            art.append(img);
+          }
+          const name = document.createElement("span");
+          name.className = "name";
+          name.textContent = item.name;
+          button.append(art, name);
+          if (FROM[item.source]) {
+            const from = document.createElement("span");
+            from.className = "from";
+            from.textContent = FROM[item.source];
+            button.append(from);
+          }
+        } else {
+          button.className = "app";
+          const initial = document.createElement("i");
+          initial.textContent = item.name.trim().charAt(0).toUpperCase();
+          const name = document.createElement("span");
+          name.textContent = item.name;
+          button.append(initial, name);
+        }
+        button.addEventListener("click", () => open(item, button));
+        return button;
+      }
+
+      function paintItems() {
+        const text = query.trim().toLowerCase();
+        const match = (i) => !text || i.name.toLowerCase().includes(text);
+        const games = items.filter((i) => i.category === "juego");
+        const apps = items.filter((i) => i.category !== "juego");
+        const shownGames = games.filter(match);
+        const shownApps = apps.filter(match);
+        $("games").replaceChildren(...shownGames.map(tile));
+        $("apps").replaceChildren(...shownApps.map(tile));
+        $("gamesBox").hidden = shownGames.length === 0;
+        $("appsBox").hidden = shownApps.length === 0;
+        $("gamesCount").textContent = games.length > 6 ? String(shownGames.length) : "";
+        $("find").hidden = games.length <= 12;
+        const nothing = shownGames.length + shownApps.length === 0;
+        $("empty").hidden = !nothing;
+        $("empty").textContent = items.length === 0 ? "Esta PC todavía no tiene juegos en la lista. Avisa en caja para que te ayuden." : `No hay nada que se llame "${query}".`;
+      }
+
+      function paintView() {
+        if (!view) return;
+        $("station").textContent = view.station ? view.station.label : "PC";
+        const name = view.session ? view.session.memberName : "";
+        $("hello").textContent = name ? `Hola, ${name}. Elige qué quieres jugar.` : "Elige qué quieres jugar.";
+      }
+
+      let toastTimer = 0;
+      function toast(text) {
+        $("toast").textContent = text;
+        $("toast").hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => ($("toast").hidden = true), 6000);
+      }
+
+      async function open(item, button) {
+        button.classList.add("opening");
+        setTimeout(() => button.classList.remove("opening"), 8000);
+        const result = await window.panter.launch(item.key);
+        if (!result.ok) {
+          button.classList.remove("opening");
+          toast(result.error || "No se pudo abrir. Avisa en caja.");
+        }
+      }
+
+      window.panter.onItems((next) => { items = next; paintItems(); });
+      window.panter.getItems().then((first) => { items = first; paintItems(); });
+      window.panter.onView((next) => { view = next; paintView(); });
+      window.panter.getView().then((first) => { view = first; paintView(); });
+
+      $("find").addEventListener("input", (event) => { query = event.target.value; paintItems(); });
+
+      // ---------- Mantenimiento ----------
+      const maintOpen = () => !$("veil").hidden;
+      function openMaint() { $("veil").hidden = false; $("maintError").textContent = ""; $("maintPin").value = ""; $("maintPin").focus(); }
+      function closeMaint() { $("veil").hidden = true; }
+      $("staffBtn").addEventListener("click", openMaint);
+      $("maintCancel").addEventListener("click", closeMaint);
+      document.addEventListener("keydown", (event) => {
+        if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "m") openMaint();
+        else if (event.key === "Escape" && maintOpen()) closeMaint();
+        else if (event.key === "Escape" && query) { query = ""; $("find").value = ""; paintItems(); }
+        // Escribir en cualquier parte busca, cuando hay buscador.
+        else if (!maintOpen() && !$("find").hidden && event.key.length === 1 && !event.ctrlKey && !event.altKey && document.activeElement !== $("find")) $("find").focus();
+      });
+      $("maint").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const action = event.submitter?.dataset.action || "desktop";
+        const result = await window.panter.maintenance({ pin: $("maintPin").value, action });
+        if (!result.ok) $("maintError").textContent = result.error;
+        else closeMaint();
+      });
+    </script>
+  </body>
+</html>

@@ -5,11 +5,15 @@
 // la PC está bloqueada, descarta esas combinaciones antes de que lleguen a Windows.
 //
 // Lo arranca Panter Bloqueo y le da órdenes por la entrada estándar:
-//   lock    -> empieza a descartar las teclas del sistema
-//   unlock  -> deja pasar todo (el cliente está jugando)
-//   quit    -> termina
-// Por seguridad nunca deja teclas bloqueadas si el programa principal desaparece: termina solo
-// cuando se cierra la entrada estándar o cuando muere el proceso que lo lanzó.
+//   lock          -> PC bloqueada: descarta todas las teclas del sistema
+//   session       -> cliente jugando con la pantalla de juegos: descarta solo la tecla Windows y Ctrl+Esc,
+//                    y deja Alt+Tab para cambiar entre el juego y Discord
+//   unlock        -> deja pasar todo (mantenimiento, o sin pantalla de juegos)
+//   taskbar-hide  -> esconde la barra de tareas de Windows (con ella se llegaría al menú Inicio con el ratón)
+//   taskbar-show  -> la vuelve a mostrar
+//   quit          -> termina
+// Por seguridad nunca deja la PC a medias si el programa principal desaparece: al terminar, por la razón
+// que sea, suelta las teclas y devuelve la barra de tareas.
 //
 // Se compila en GitHub Actions con el compilador de C# que trae Windows (csc, C# 5).
 
@@ -74,24 +78,63 @@ static class KeyBlock
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     static extern IntPtr GetModuleHandle(string lpModuleName);
 
-    static volatile bool blocking = false;
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr FindWindowEx(IntPtr parent, IntPtr childAfter, string lpClassName, string lpWindowName);
+
+    [DllImport("user32.dll")]
+    static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    const int SW_HIDE = 0;
+    const int SW_SHOWNA = 8;
+
+    // 0 = no se descarta nada, 1 = sesión (tecla Windows), 2 = bloqueo total.
+    static volatile int mode = 0;
+    static volatile bool taskbarHidden = false;
+
+    // La barra de tareas principal y las de los monitores adicionales. Devuelve cuántas encontró.
+    static int SetTaskbar(bool visible)
+    {
+        int count = 0;
+        IntPtr main = FindWindow("Shell_TrayWnd", null);
+        if (main != IntPtr.Zero) { ShowWindow(main, visible ? SW_SHOWNA : SW_HIDE); count++; }
+        IntPtr other = IntPtr.Zero;
+        while ((other = FindWindowEx(IntPtr.Zero, other, "Shell_SecondaryTrayWnd", null)) != IntPtr.Zero)
+        {
+            ShowWindow(other, visible ? SW_SHOWNA : SW_HIDE);
+            count++;
+        }
+        taskbarHidden = !visible;
+        return count;
+    }
+
+    static void Leave()
+    {
+        try { if (taskbarHidden) SetTaskbar(true); } catch (Exception) { }
+        Environment.Exit(0);
+    }
+
     static IntPtr hook = IntPtr.Zero;
     // Se guarda en un campo para que el recolector de basura no libere el delegado mientras Windows lo usa.
     static HookProc callback = new HookProc(OnKey);
 
     static IntPtr OnKey(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0 && blocking)
+        int current = mode;
+        if (nCode >= 0 && current > 0)
         {
             KBDLLHOOKSTRUCT key = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
             uint vk = key.vkCode;
             bool alt = (key.flags & LLKHF_ALTDOWN) != 0;
             bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
 
-            bool systemKey =
-                vk == VK_LWIN || vk == VK_RWIN || vk == VK_APPS ||                        // tecla Windows y menú contextual
-                (alt && (vk == VK_TAB || vk == VK_ESCAPE || vk == VK_F4 || vk == VK_SPACE)) || // Alt+Tab, Alt+Esc, Alt+F4, Alt+Espacio
-                (ctrl && vk == VK_ESCAPE);                                                // Ctrl+Esc y Ctrl+Mayús+Esc
+            // Siempre que haya algo que proteger: la tecla Windows y Ctrl+Esc (las dos abren el menú Inicio).
+            bool systemKey = vk == VK_LWIN || vk == VK_RWIN || (ctrl && vk == VK_ESCAPE);
+            // Solo con la PC bloqueada: menú contextual, Alt+Tab, Alt+Esc, Alt+F4 y Alt+Espacio.
+            if (current == 2)
+                systemKey = systemKey || vk == VK_APPS || (alt && (vk == VK_TAB || vk == VK_ESCAPE || vk == VK_F4 || vk == VK_SPACE));
 
             // Devolver 1 descarta la tecla: Windows nunca se entera de que se pulsó.
             if (systemKey) return (IntPtr)1;
@@ -105,7 +148,7 @@ static class KeyBlock
         {
             try { Process.GetProcessById(pid).WaitForExit(); }
             catch (Exception) { }
-            Environment.Exit(0);
+            Leave();
         });
         watcher.IsBackground = true;
         watcher.Start();
@@ -121,14 +164,17 @@ static class KeyBlock
                 while ((line = Console.In.ReadLine()) != null)
                 {
                     line = line.Trim();
-                    if (line == "lock") blocking = true;
-                    else if (line == "unlock") blocking = false;
+                    if (line == "lock") mode = 2;
+                    else if (line == "session") mode = 1;
+                    else if (line == "unlock") mode = 0;
+                    else if (line == "taskbar-hide") { Console.Out.WriteLine("taskbar hidden " + SetTaskbar(false)); Console.Out.Flush(); }
+                    else if (line == "taskbar-show") { Console.Out.WriteLine("taskbar shown " + SetTaskbar(true)); Console.Out.Flush(); }
                     else if (line == "quit") break;
                 }
             }
             catch (Exception) { }
-            // Entrada cerrada u orden de salir: se termina y las teclas quedan libres.
-            Environment.Exit(0);
+            // Entrada cerrada u orden de salir: se termina, las teclas quedan libres y vuelve la barra de tareas.
+            Leave();
         });
         reader.IsBackground = true;
         reader.Start();

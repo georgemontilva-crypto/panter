@@ -71,6 +71,9 @@ export const stations = mysqlTable(
     agentVersion: varchar("agent_version", { length: 20 }),
     // Desbloqueo manual desde el panel (mantenimiento, instalar juegos).
     unlockUntil: ms("unlock_until"),
+    // Juegos de Steam y Epic que el programa encontró instalados en esta PC (JSON), para poder ocultarlos desde el panel.
+    catalog: text("catalog"),
+    catalogAt: ms("catalog_at"),
   },
   (t) => [uniqueIndex("stations_kind_number").on(t.kind, t.number), index("stations_token").on(t.deviceTokenHash)],
 );
@@ -260,6 +263,20 @@ export const purchases = mysqlTable(
   },
   (t) => [index("purchases_date").on(t.invoiceDate)],
 );
+
+// ---------- Pantalla de juegos de las PC ----------
+// Apps que se agregan a mano desde el panel (Discord, Valorant, Roblox…). Lo de Steam y Epic lo detecta cada PC sola.
+export const launcherApps = mysqlTable("launcher_apps", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 80 }).notNull(),
+  category: mysqlEnum("category", ["juego", "app"]).notNull().default("juego"),
+  // Ruta del programa en la PC (C:\...\juego.exe) o enlace de lanzador (steam://rungameid/730).
+  target: varchar("target", { length: 400 }).notNull(),
+  args: varchar("args", { length: 200 }),
+  imageUrl: varchar("image_url", { length: 400 }),
+  active: boolean("active").notNull().default(true),
+  createdAt: ms("created_at").notNull(),
+});
 
 export const settings = mysqlTable("settings", {
   key: varchar("key", { length: 40 }).primaryKey(),

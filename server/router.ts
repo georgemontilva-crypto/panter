@@ -2,7 +2,7 @@ import { and, count, desc, eq, like, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { checkPassword, endLogin, hashPassword, startLogin } from "./auth";
 import { db } from "./db";
-import { PAY_METHODS, QUOTE_STATES, STATION_KINDS, partyPackages, products, purchases, stations, users } from "./db/schema";
+import { PAY_METHODS, QUOTE_STATES, STATION_KINDS, launcherApps, partyPackages, products, purchases, stations, users } from "./db/schema";
 import { QR_PREFIX, caracasDate, clearRateLimit, fail, newDeviceToken, normalizePhone, now, rateLimit, sha256, MINUTE } from "./lib";
 import {
   activeMenu,
@@ -14,6 +14,8 @@ import {
   endSession,
   extendSession,
   getConfig,
+  getLauncherSettings,
+  isLauncherTarget,
   kitchenBoard,
   ledger,
   levelFor,
@@ -22,6 +24,7 @@ import {
   recordVisit,
   refundOrder,
   saveConfig,
+  saveLauncherSettings,
   setKitchenStatus,
   startSession,
   stationsBoard,
@@ -559,6 +562,80 @@ const adminRouter = router({
         balanceCents: await ledger(tx, { userId: input.userId, type: "adjust", amountCents: input.amountCents, note: input.note, staffId: ctx.user.id }),
       })),
     ),
+
+  // ---------- Pantalla de juegos de las PC ----------
+  launcher: adminProcedure.query(async () => {
+    const [config, apps, pcs] = await Promise.all([
+      getLauncherSettings(),
+      db.select().from(launcherApps).orderBy(launcherApps.category, launcherApps.name),
+      db.select({ id: stations.id, catalog: stations.catalog }).from(stations).where(eq(stations.kind, "pc")),
+    ]);
+    // Lo que las PC encontraron instalado, sin repetir, con en cuántas PC está cada juego.
+    const found = new Map<string, { key: string; name: string; source: string; pcs: number }>();
+    for (const pc of pcs) {
+      let items: { key: string; name: string; source: string }[] = [];
+      try {
+        items = pc.catalog ? JSON.parse(pc.catalog) : [];
+      } catch {
+        items = [];
+      }
+      for (const item of items) found.set(item.key, { ...item, pcs: (found.get(item.key)?.pcs ?? 0) + 1 });
+    }
+    return {
+      enabled: config.enabled,
+      signOut: config.signOut,
+      apps: apps.map((a) => ({ id: a.id, name: a.name, category: a.category, target: a.target, args: a.args, imageUrl: a.imageUrl, active: a.active })),
+      detected: [...found.values()].sort((a, b) => a.name.localeCompare(b.name)).map((d) => ({ ...d, hidden: config.hidden.includes(d.key) })),
+      reportingPcs: pcs.filter((pc) => pc.catalog !== null).length,
+      totalPcs: pcs.length,
+    };
+  }),
+
+  launcherSave: adminProcedure.input(z.object({ enabled: z.boolean(), signOut: z.boolean() })).mutation(async ({ input }) => {
+    await saveLauncherSettings({ ...(await getLauncherSettings()), ...input });
+    return { ok: true };
+  }),
+
+  launcherHide: adminProcedure.input(z.object({ key: z.string().regex(/^(steam|epic):[\w.-]{1,80}$/), hidden: z.boolean() })).mutation(async ({ input }) => {
+    const config = await getLauncherSettings();
+    const hidden = new Set(config.hidden);
+    if (input.hidden) hidden.add(input.key);
+    else hidden.delete(input.key);
+    await saveLauncherSettings({ ...config, hidden: [...hidden] });
+    return { ok: true };
+  }),
+
+  launcherAppSave: adminProcedure
+    .input(
+      z.object({
+        id: id.optional(),
+        name: z.string().trim().min(2, "Escribe el nombre del juego o la app.").max(80),
+        category: z.enum(["juego", "app"]),
+        target: z
+          .string()
+          .trim()
+          .max(400)
+          .refine(isLauncherTarget, "Pon la ruta completa del programa (C:\\Juegos\\juego.exe) o un enlace de lanzador (steam://rungameid/730)."),
+        args: z.string().trim().max(200).optional(),
+        imageUrl: z.union([z.literal(""), z.url("La imagen debe ser un enlace que empiece por https://").startsWith("https://", "La imagen debe ser un enlace que empiece por https://").max(400)]).optional(),
+        active: z.boolean(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const { id: appId, ...values } = input;
+      const row = { ...values, args: values.args || null, imageUrl: values.imageUrl || null };
+      if (appId) {
+        await db.update(launcherApps).set(row).where(eq(launcherApps.id, appId));
+        return { id: appId };
+      }
+      const [created] = await db.insert(launcherApps).values({ ...row, createdAt: now() });
+      return { id: created.insertId };
+    }),
+
+  launcherAppRemove: adminProcedure.input(z.object({ id })).mutation(async ({ input }) => {
+    await db.delete(launcherApps).where(eq(launcherApps.id, input.id));
+    return { ok: true };
+  }),
 
   // Corrección manual del tiempo a favor: sumar o quitar minutos de un tipo de máquina.
   adjustTime: adminProcedure

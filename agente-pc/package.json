@@ -1,7 +1,7 @@
 {
   "name": "panter-bloqueo",
   "productName": "Panter Bloqueo",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "description": "Programa de bloqueo de las PC de Arena Panter",
   "author": "Gammalab Studios",
   "private": true,
@@ -21,8 +21,10 @@
     "appId": "com.arenapanter.bloqueo",
     "files": [
       "main.js",
+      "launcher.js",
       "preload.js",
       "lock.html",
+      "launcher.html",
       "overlay.html",
       "mark.svg",
       "build/icon.ico"
