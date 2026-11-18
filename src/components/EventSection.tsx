@@ -103,6 +103,109 @@ function NightTimeline({ now }: { now: number }) {
   );
 }
 
+// Los pases van en un carrusel horizontal: se desliza con el dedo, con las flechas o con los puntos.
+// Si en la pantalla caben todos, se ven todos y los controles desaparecen.
+function PassCarousel({ over }: { over: boolean }) {
+  const track = useRef<HTMLUListElement>(null);
+  const [active, setActive] = useState(0);
+  const [scrollable, setScrollable] = useState(false);
+  const last = event.passes.length - 1;
+
+  useEffect(() => {
+    const el = track.current;
+    if (!el) return;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const cards = [...el.children] as HTMLElement[];
+      setScrollable(el.scrollWidth > el.clientWidth + 4);
+      // El pase activo es el que quedó más cerca del borde izquierdo del carrusel.
+      const left = el.getBoundingClientRect().left + parseFloat(getComputedStyle(el).paddingLeft);
+      let nearest = 0;
+      cards.forEach((card, i) => {
+        if (Math.abs(card.getBoundingClientRect().left - left) < Math.abs(cards[nearest].getBoundingClientRect().left - left)) nearest = i;
+      });
+      // Al llegar al final, el último pase puede no alcanzar el borde: igual es el activo.
+      setActive(el.scrollLeft + el.clientWidth >= el.scrollWidth - 4 && el.scrollLeft > 0 ? cards.length - 1 : nearest);
+    };
+    const onChange = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    measure();
+    el.addEventListener("scroll", onChange, { passive: true });
+    window.addEventListener("resize", onChange);
+    return () => {
+      cancelAnimationFrame(frame);
+      el.removeEventListener("scroll", onChange);
+      window.removeEventListener("resize", onChange);
+    };
+  }, []);
+
+  const go = (index: number) => {
+    const el = track.current;
+    const card = el?.children[Math.max(0, Math.min(last, index))] as HTMLElement | undefined;
+    if (!el || !card) return;
+    const left = el.scrollLeft + card.getBoundingClientRect().left - el.getBoundingClientRect().left - parseFloat(getComputedStyle(el).paddingLeft);
+    el.scrollTo({ left, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+  };
+
+  return (
+    <div className="carousel" role="group" aria-roledescription="carrusel" aria-label="Pases del evento">
+      <ul className="passes__list" ref={track} tabIndex={scrollable ? 0 : undefined}>
+        {event.passes.map((pass, i) => (
+          <li className={`pass pass--${pass.tone}`} key={pass.id} aria-label={`${pass.name}, ${i + 1} de ${event.passes.length}`}>
+            <div className="pass__stub">
+              <h4>{pass.name}</h4>
+              <p className="pass__price">
+                <span>{pass.price}</span>
+                <abbr title="Dólares de referencia">REF</abbr>
+              </p>
+            </div>
+            <div className="pass__body">
+              <ul>
+                {pass.perks.map((perk) => (
+                  <li key={perk}>{perk}</li>
+                ))}
+              </ul>
+              {!over && (
+                <a className="btn btn--pass" href={reserveUrl(`Hola, quiero el ${pass.name} para ${event.name}.`)} target="_blank" rel="noreferrer">
+                  Reservar {pass.name}
+                </a>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {scrollable && (
+        <div className="carousel__nav">
+          <button type="button" className="carousel__arrow" onClick={() => go(active - 1)} disabled={active === 0} aria-label="Pase anterior">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 5l-7 7 7 7" />
+            </svg>
+          </button>
+          <div className="carousel__dots">
+            {event.passes.map((pass, i) => (
+              <button
+                key={pass.id}
+                type="button"
+                className={`carousel__dot carousel__dot--${pass.tone}${i === active ? " is-active" : ""}`}
+                onClick={() => go(i)}
+                aria-label={`Ver ${pass.name}`}
+                aria-current={i === active ? "true" : undefined}
+              />
+            ))}
+          </div>
+          <button type="button" className="carousel__arrow" onClick={() => go(active + 1)} disabled={active === last} aria-label="Pase siguiente">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function EventSection() {
   const now = useNow(1000);
   const live = now >= event.startsAt && now < event.endsAt;
@@ -156,36 +259,7 @@ export default function EventSection() {
               Precios en REF. {over ? "La venta de pases ya cerró." : `Escríbenos por ${reserveChannel} y te confirmamos el tuyo.`}
             </p>
           </div>
-          <ul className="passes__list">
-            {event.passes.map((pass) => (
-              <li className={`pass pass--${pass.tone}`} key={pass.id}>
-                <div className="pass__stub">
-                  <h4>{pass.name}</h4>
-                  <p className="pass__price">
-                    <span>{pass.price}</span>
-                    <abbr title="Dólares de referencia">REF</abbr>
-                  </p>
-                </div>
-                <div className="pass__body">
-                  <ul>
-                    {pass.perks.map((perk) => (
-                      <li key={perk}>{perk}</li>
-                    ))}
-                  </ul>
-                  {!over && (
-                    <a
-                      className="btn btn--pass"
-                      href={reserveUrl(`Hola, quiero el ${pass.name} para ${event.name}.`)}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Reservar {pass.name}
-                    </a>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
+          <PassCarousel over={over} />
         </div>
       </div>
     </section>

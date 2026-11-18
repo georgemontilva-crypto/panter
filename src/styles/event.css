@@ -303,11 +303,109 @@
 .passes__head p {
   color: #d9c8f2;
 }
+/* Carrusel horizontal: se desliza con el dedo y cada pase encaja en su sitio.
+   Los pases crecen para llenar la fila; cuando no caben todos, la fila se desliza. */
+.carousel {
+  --gap: clamp(14px, 2vw, 28px);
+}
 .passes__list {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: clamp(16px, 2vw, 28px);
+  display: flex;
+  gap: var(--gap);
   align-items: stretch;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  /* La fila llega hasta los bordes de la pantalla, para que el pase siguiente asome y se note que se desliza.
+     El relleno y el punto de encaje dejan el primero alineado con el resto de la página. */
+  margin-inline: calc(var(--pad) * -1);
+  padding: 6px var(--pad);
+  scroll-padding-inline: var(--pad);
+}
+.passes__list::-webkit-scrollbar {
+  display: none;
+}
+.passes__list:focus-visible {
+  outline: 2px solid var(--bone);
+  outline-offset: 4px;
+}
+.passes__list > .pass {
+  flex: 1 0 min(78vw, 340px);
+  scroll-snap-align: start;
+}
+.carousel__nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  margin-top: 18px;
+}
+.carousel__arrow {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  background: rgba(9, 2, 22, 0.78);
+  border: 2px solid var(--bone);
+  color: var(--bone);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, opacity 0.15s;
+}
+.carousel__arrow svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: square;
+}
+.carousel__arrow:hover:not(:disabled) {
+  background: var(--bone);
+  color: var(--black);
+}
+.carousel__arrow:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.carousel__dots {
+  display: flex;
+  align-items: center;
+}
+/* El punto es pequeño a la vista, pero el botón que lo contiene mide 44 px para tocarlo cómodo. */
+.carousel__dot {
+  --tone: var(--red);
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.carousel__dot--violet {
+  --tone: #b56dff;
+}
+.carousel__dot--gold {
+  --tone: var(--gold);
+}
+.carousel__dot::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--tone);
+  transition: width 0.2s, background-color 0.2s;
+}
+.carousel__dot.is-active::before {
+  width: 30px;
+  background: var(--tone);
+}
+@media (prefers-reduced-motion: reduce) {
+  .carousel__dot::before,
+  .carousel__arrow {
+    transition: none;
+  }
 }
 .pass {
   --tone: var(--red);
@@ -405,10 +503,6 @@
   }
   .event__title {
     font-size: clamp(4rem, 19.5vw, 11rem);
-  }
-  .passes__list {
-    grid-template-columns: 1fr;
-    max-width: 520px;
   }
   .pass {
     --notch: 150px;
