@@ -7,10 +7,16 @@ const ms = (name: string) => bigint(name, { mode: "number" });
 export const STATION_KINDS = ["pc", "ps5", "switch", "sim"] as const;
 export const PAY_METHODS = ["efectivo_usd", "efectivo_bs", "pago_movil", "punto", "zelle", "otro"] as const;
 export const TX_TYPES = ["topup", "card_sale", "session", "refund", "bonus", "adjust", "purchase"] as const;
+// Tipos de usuario. "member" es el cliente; los demás son personal:
+// cashier = operadora (máquinas y caja), kitchen = cocina (solo comandas),
+// admin = administrador (todo), owner = súper admin, el dueño (todo, y además maneja a los administradores).
+export const ROLES = ["member", "cashier", "kitchen", "admin", "owner"] as const;
+export const KITCHEN_STATES = ["none", "pending", "preparing", "ready", "delivered"] as const;
+export const QUOTE_STATES = ["draft", "sent", "approved", "scheduled", "done", "cancelled"] as const;
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
-  role: mysqlEnum("role", ["member", "cashier", "admin"]).notNull().default("member"),
+  role: mysqlEnum("role", ROLES).notNull().default("member"),
   name: varchar("name", { length: 120 }).notNull(),
   phone: varchar("phone", { length: 20 }).unique(),
   email: varchar("email", { length: 190 }).unique(),
@@ -109,6 +115,8 @@ export const products = mysqlTable("products", {
   category: varchar("category", { length: 40 }).notNull().default("General"),
   priceCents: int("price_cents").notNull(),
   active: boolean("active").notNull().default(true),
+  // Si se prepara en cocina, la orden genera comanda. Un refresco de la nevera no hace falta que pase por cocina.
+  kitchen: boolean("kitchen").notNull().default(true),
   createdAt: ms("created_at").notNull(),
 });
 
@@ -123,8 +131,13 @@ export const orders = mysqlTable(
     createdAt: ms("created_at").notNull(),
     refundedAt: ms("refunded_at"),
     refundedBy: int("refunded_by"),
+    // Comanda de cocina. "none" = la orden no lleva nada que preparar.
+    kitchenStatus: mysqlEnum("kitchen_status", KITCHEN_STATES).notNull().default("none"),
+    note: varchar("note", { length: 160 }),
+    readyAt: ms("ready_at"),
+    deliveredAt: ms("delivered_at"),
   },
-  (t) => [index("orders_user").on(t.userId, t.createdAt), index("orders_created").on(t.createdAt)],
+  (t) => [index("orders_user").on(t.userId, t.createdAt), index("orders_created").on(t.createdAt), index("orders_kitchen").on(t.kitchenStatus)],
 );
 
 // Cada renglón guarda el nombre y el precio del momento: si el menú cambia, la orden no.
@@ -137,8 +150,96 @@ export const orderItems = mysqlTable(
     name: varchar("name", { length: 80 }).notNull(),
     unitCents: int("unit_cents").notNull(),
     qty: int("qty").notNull(),
+    kitchen: boolean("kitchen").notNull().default(true),
   },
   (t) => [index("order_items_order").on(t.orderId)],
+);
+
+// ---------- Fiestas: paquetes, cotizaciones y sus pagos ----------
+export const partyPackages = mysqlTable("party_packages", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 80 }).notNull(),
+  description: varchar("description", { length: 400 }),
+  priceCents: int("price_cents").notNull(),
+  durationMinutes: int("duration_minutes").notNull().default(120),
+  guests: int("guests").notNull().default(10),
+  active: boolean("active").notNull().default(true),
+  createdAt: ms("created_at").notNull(),
+});
+
+export const quotes = mysqlTable(
+  "quotes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    customerName: varchar("customer_name", { length: 120 }).notNull(),
+    customerPhone: varchar("customer_phone", { length: 20 }),
+    customerEmail: varchar("customer_email", { length: 190 }),
+    occasion: varchar("occasion", { length: 120 }),
+    // Fecha y hora de la fiesta. Puede faltar mientras es borrador; es obligatoria para agendar.
+    eventAt: ms("event_at"),
+    durationMinutes: int("duration_minutes").notNull().default(120),
+    guests: int("guests").notNull().default(10),
+    notes: text("notes"),
+    status: mysqlEnum("status", QUOTE_STATES).notNull().default("draft"),
+    totalCents: int("total_cents").notNull().default(0),
+    paidCents: int("paid_cents").notNull().default(0),
+    // Número de recibo, correlativo: se asigna cuando la cotización queda pagada completa.
+    receiptNumber: int("receipt_number"),
+    paidAt: ms("paid_at"),
+    createdBy: int("created_by").notNull(),
+    createdAt: ms("created_at").notNull(),
+    updatedAt: ms("updated_at").notNull(),
+  },
+  (t) => [index("quotes_status").on(t.status), index("quotes_event").on(t.eventAt)],
+);
+
+// Renglones con el nombre y el precio del momento. Un descuento es un renglón con precio negativo.
+export const quoteItems = mysqlTable(
+  "quote_items",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    quoteId: int("quote_id").notNull(),
+    description: varchar("description", { length: 160 }).notNull(),
+    qty: int("qty").notNull().default(1),
+    unitCents: int("unit_cents").notNull(),
+    sort: int("sort").notNull().default(0),
+  },
+  (t) => [index("quote_items_quote").on(t.quoteId)],
+);
+
+export const quotePayments = mysqlTable(
+  "quote_payments",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    quoteId: int("quote_id").notNull(),
+    amountCents: int("amount_cents").notNull(),
+    method: mysqlEnum("method", PAY_METHODS).notNull(),
+    reference: varchar("reference", { length: 80 }),
+    staffId: int("staff_id").notNull(),
+    createdAt: ms("created_at").notNull(),
+  },
+  (t) => [index("quote_payments_quote").on(t.quoteId), index("quote_payments_created").on(t.createdAt)],
+);
+
+// ---------- Facturas de compras: lo que Panter le paga a sus proveedores ----------
+export const purchases = mysqlTable(
+  "purchases",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    supplier: varchar("supplier", { length: 120 }).notNull(),
+    invoiceNumber: varchar("invoice_number", { length: 40 }),
+    // Fecha de la factura, AAAA-MM-DD.
+    invoiceDate: varchar("invoice_date", { length: 10 }).notNull(),
+    category: varchar("category", { length: 40 }).notNull().default("Otros"),
+    description: varchar("description", { length: 300 }),
+    totalCents: int("total_cents").notNull(),
+    paidAt: ms("paid_at"),
+    method: mysqlEnum("method", PAY_METHODS),
+    reference: varchar("reference", { length: 80 }),
+    createdBy: int("created_by").notNull(),
+    createdAt: ms("created_at").notNull(),
+  },
+  (t) => [index("purchases_date").on(t.invoiceDate)],
 );
 
 export const settings = mysqlTable("settings", {

@@ -1,9 +1,9 @@
-import { and, count, desc, eq, gte, like, lt, ne, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, like, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { checkPassword, endLogin, hashPassword, startLogin } from "./auth";
 import { db } from "./db";
-import { PAY_METHODS, STATION_KINDS, products, sessions, stations, users, visits, walletTx } from "./db/schema";
-import { QR_PREFIX, caracasDate, caracasDayBounds, clearRateLimit, fail, newDeviceToken, normalizePhone, now, rateLimit, sha256, MINUTE } from "./lib";
+import { PAY_METHODS, QUOTE_STATES, STATION_KINDS, partyPackages, products, purchases, stations, users } from "./db/schema";
+import { QR_PREFIX, caracasDate, clearRateLimit, fail, newDeviceToken, normalizePhone, now, rateLimit, sha256, MINUTE } from "./lib";
 import {
   activeMenu,
   activeSessionsOf,
@@ -13,19 +13,21 @@ import {
   endSession,
   extendSession,
   getConfig,
+  kitchenBoard,
   ledger,
   levelFor,
-  namesOf,
   recentOrders,
   recentTx,
   recordVisit,
   refundOrder,
   saveConfig,
+  setKitchenStatus,
   startSession,
   stationsBoard,
   userTx,
 } from "./services";
-import { adminProcedure, memberProcedure, publicProcedure, router, staffProcedure } from "./trpc";
+import { addQuotePayment, createQuote, dayReport, getQuote, listPackages, listPurchases, listQuotes, liveSummary, removeQuotePayment, savePurchase, setQuoteStatus, updateQuote, PURCHASE_CATEGORIES } from "./office";
+import { adminProcedure, deskProcedure, kitchenProcedure, memberProcedure, publicProcedure, router } from "./trpc";
 
 const name = z.string().trim().min(2, "Escribe el nombre completo.").max(120);
 const phone = z
@@ -185,12 +187,12 @@ const memberRouter = router({
 const method = z.enum(PAY_METHODS);
 
 const staffRouter = router({
-  config: staffProcedure.query(async () => {
+  config: deskProcedure.query(async () => {
     const config = await getConfig();
     return { ...config, closing: closingInfo(config) };
   }),
 
-  find: staffProcedure.input(z.object({ q: z.string().trim().max(120) })).query(async ({ input }) => {
+  find: deskProcedure.input(z.object({ q: z.string().trim().max(120) })).query(async ({ input }) => {
     const q = input.q;
     if (q.length < 2) return [];
     const digits = q.replace(/\D/g, "");
@@ -207,14 +209,14 @@ const staffRouter = router({
     return rows.map((u) => ({ ...publicUser(u), balanceCents: u.balanceCents, visitsCount: u.visitsCount, hasCard: u.hasCard, active: u.active }));
   }),
 
-  member: staffProcedure.input(z.object({ id })).query(async ({ input }) => memberDetail(await getMember(input.id))),
+  member: deskProcedure.input(z.object({ id })).query(async ({ input }) => memberDetail(await getMember(input.id))),
 
-  createMember: staffProcedure.input(z.object({ name, phone, email })).mutation(async ({ ctx, input }) => {
+  createMember: deskProcedure.input(z.object({ name, phone, email })).mutation(async ({ ctx, input }) => {
     const userId = await createUser({ name: input.name, phone: input.phone, email: input.email?.toLowerCase(), createdBy: ctx.user.id });
     return { id: userId };
   }),
 
-  topup: staffProcedure
+  topup: deskProcedure
     .input(
       z.object({
         userId: id,
@@ -237,7 +239,7 @@ const staffRouter = router({
       })),
     ),
 
-  sellCard: staffProcedure.input(z.object({ userId: id, method })).mutation(async ({ ctx, input }) => {
+  sellCard: deskProcedure.input(z.object({ userId: id, method })).mutation(async ({ ctx, input }) => {
     const config = await getConfig();
     const member = await getMember(input.userId);
     if (member.hasCard) fail("CONFLICT", "Este cliente ya compró su tarjeta.");
@@ -256,7 +258,7 @@ const staffRouter = router({
   }),
 
   // Cobro en el mostrador: se escanea la tarjeta, se eligen los productos y se descuenta del saldo.
-  sell: staffProcedure
+  sell: deskProcedure
     .input(
       z.object({
         userId: id,
@@ -264,78 +266,151 @@ const staffRouter = router({
           .array(z.object({ productId: id, qty: z.number().int().min(1).max(50) }))
           .min(1, "Agrega al menos un producto al pedido.")
           .max(40),
+        // Indicación para cocina: "sin cebolla", "para llevar"…
+        note: z.string().trim().max(160).optional(),
       }),
     )
-    .mutation(({ ctx, input }) => createOrder({ userId: input.userId, staffId: ctx.user.id, items: input.items })),
+    .mutation(({ ctx, input }) => createOrder({ userId: input.userId, staffId: ctx.user.id, items: input.items, note: input.note })),
 
-  refundOrder: staffProcedure.input(z.object({ orderId: id })).mutation(({ ctx, input }) => refundOrder({ orderId: input.orderId, staffId: ctx.user.id })),
+  refundOrder: deskProcedure.input(z.object({ orderId: id })).mutation(({ ctx, input }) => refundOrder({ orderId: input.orderId, staffId: ctx.user.id })),
 
-  checkin: staffProcedure.input(z.object({ userId: id })).mutation(async ({ input }) => {
+  checkin: deskProcedure.input(z.object({ userId: id })).mutation(async ({ input }) => {
     const config = await getConfig();
     const isNew = await userTx(input.userId, (tx) => recordVisit(tx, input.userId, "checkin", config));
     return { isNew };
   }),
 
-  board: staffProcedure.query(() => stationsBoard()),
+  board: deskProcedure.query(() => stationsBoard()),
 
-  start: staffProcedure
+  start: deskProcedure
     .input(z.object({ userId: id, stationId: id, minutes: staffMinutes }))
     .mutation(({ ctx, input }) => startSession({ ...input, staffId: ctx.user.id })),
 
-  extend: staffProcedure
+  extend: deskProcedure
     .input(z.object({ sessionId: id, minutes: staffMinutes }))
     .mutation(({ ctx, input }) => extendSession({ ...input, staffId: ctx.user.id })),
 
-  end: staffProcedure
+  end: deskProcedure
     .input(z.object({ sessionId: id }))
     .mutation(({ ctx, input }) => endSession({ sessionId: input.sessionId, staffId: ctx.user.id, reason: "caja" })),
 
   // Cierre del día: lo que entró a caja por método y la actividad de la jornada.
-  day: staffProcedure.input(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() })).query(async ({ input }) => {
-    const day = input.day ?? caracasDate();
-    const [from, to] = caracasDayBounds(day);
-    const inDay = and(gte(walletTx.createdAt, from), lt(walletTx.createdAt, to));
-    const [byMethod, moves, [sessionCount], [visitCount], [newMembers]] = await Promise.all([
-      db
-        .select({ method: walletTx.method, total: sql<string>`sum(${walletTx.paidCents})`, n: count() })
-        .from(walletTx)
-        .where(and(inDay, ne(walletTx.paidCents, 0)))
-        .groupBy(walletTx.method),
-      db.select().from(walletTx).where(inDay).orderBy(desc(walletTx.id)).limit(200),
-      db.select({ n: count() }).from(sessions).where(and(gte(sessions.startedAt, from), lt(sessions.startedAt, to))),
-      db.select({ n: count() }).from(visits).where(eq(visits.visitDate, day)),
-      db.select({ n: count() }).from(users).where(and(eq(users.role, "member"), gte(users.createdAt, from), lt(users.createdAt, to))),
-    ]);
-    const people = await namesOf([...new Set(moves.flatMap((m) => [m.userId, m.staffId ?? 0]))].filter(Boolean));
-    const sum = (type: string) => moves.filter((m) => m.type === type).reduce((a, m) => a + m.amountCents, 0);
-    return {
-      day,
-      byMethod: byMethod.map((r) => ({ method: r.method, totalCents: Number(r.total), count: r.n })),
-      cashInCents: byMethod.reduce((a, r) => a + Number(r.total), 0),
-      // Jugado: tiempo cobrado menos las devoluciones de tiempo (las de órdenes van con el menú).
-      playedCents: -sum("session") - moves.filter((m) => m.type === "refund" && !m.orderId).reduce((a, m) => a + m.amountCents, 0),
-      // Vendido del menú: compras menos las órdenes anuladas ese día.
-      menuCents: -sum("purchase") - moves.filter((m) => m.type === "refund" && m.orderId).reduce((a, m) => a + m.amountCents, 0),
-      cardsSold: moves.filter((m) => m.type === "card_sale").length,
-      sessions: sessionCount.n,
-      visits: visitCount.n,
-      newMembers: newMembers.n,
-      moves: moves.map((m) => ({
-        id: m.id,
-        type: m.type,
-        amountCents: m.amountCents,
-        paidCents: m.paidCents,
-        method: m.method,
-        note: m.note,
-        createdAt: m.createdAt,
-        member: people.get(m.userId) ?? "",
-        staff: m.staffId ? (people.get(m.staffId) ?? "") : "",
-      })),
-    };
+  // Cierre del día: ventas y dinero que entró. Solo administradores y súper admin.
+  day: adminProcedure.input(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() })).query(({ input }) => dayReport(input.day ?? caracasDate())),
+});
+
+// ---------- Cocina ----------
+const kitchenRouter = router({
+  board: kitchenProcedure.query(() => kitchenBoard()),
+  setStatus: kitchenProcedure
+    .input(z.object({ orderId: id, status: z.enum(["pending", "preparing", "ready", "delivered"]) }))
+    .mutation(({ input }) => setKitchenStatus(input.orderId, input.status)),
+});
+
+// ---------- Oficina: resumen en vivo, fiestas y compras ----------
+const quoteInput = z.object({
+  customerName: name,
+  customerPhone: z.string().trim().max(20).optional(),
+  customerEmail: email,
+  occasion: z.string().trim().max(120).optional(),
+  eventAt: z.number().int().positive().nullable(),
+  durationMinutes: z.number().int().min(30, "La fiesta dura al menos 30 minutos.").max(24 * 60),
+  guests: z.number().int().min(1, "Indica cuántos invitados son.").max(500),
+  notes: z.string().trim().max(2000).optional(),
+  items: z
+    .array(
+      z.object({
+        description: z.string().trim().min(1, "Cada renglón necesita una descripción.").max(160),
+        qty: z.number().int().min(1, "La cantidad mínima es 1.").max(999),
+        // Negativo = descuento.
+        unitCents: cents.min(-10_000_000).max(10_000_000),
+      }),
+    )
+    .min(1, "Agrega un paquete o al menos un renglón a la cotización.")
+    .max(40),
+});
+const dayString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Indica la fecha de la factura.");
+
+const officeRouter = router({
+  live: adminProcedure.query(() => liveSummary()),
+
+  // Paquetes de fiesta
+  packages: adminProcedure.query(() => listPackages(false)),
+  packageSave: adminProcedure
+    .input(
+      z.object({
+        id: id.optional(),
+        name: z.string().trim().min(2, "Escribe el nombre del paquete.").max(80),
+        description: z.string().trim().max(400).optional(),
+        priceCents: cents.min(0).max(10_000_000),
+        durationMinutes: z.number().int().min(30).max(24 * 60),
+        guests: z.number().int().min(1).max(500),
+        active: z.boolean(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const { id: packageId, ...values } = input;
+      const row = { ...values, description: values.description || null };
+      if (packageId) {
+        await db.update(partyPackages).set(row).where(eq(partyPackages.id, packageId));
+        return { id: packageId };
+      }
+      const [created] = await db.insert(partyPackages).values({ ...row, createdAt: now() });
+      return { id: created.insertId };
+    }),
+
+  // Cotizaciones
+  quotes: adminProcedure.query(() => listQuotes()),
+  quote: adminProcedure.input(z.object({ id })).query(({ input }) => getQuote(input.id)),
+  quoteCreate: adminProcedure.input(quoteInput).mutation(({ ctx, input }) => createQuote(input, ctx.user.id)),
+  quoteUpdate: adminProcedure.input(quoteInput.extend({ id })).mutation(({ input }) => updateQuote(input.id, input)),
+  quoteStatus: adminProcedure.input(z.object({ id, status: z.enum(QUOTE_STATES) })).mutation(({ input }) => setQuoteStatus(input.id, input.status)),
+  quotePay: adminProcedure
+    .input(z.object({ id, amountCents: cents.min(1, "El pago debe ser mayor que cero."), method, reference: z.string().trim().max(80).optional() }))
+    .mutation(({ ctx, input }) => addQuotePayment({ quoteId: input.id, amountCents: input.amountCents, method: input.method, reference: input.reference, staffId: ctx.user.id })),
+  quotePaymentRemove: adminProcedure.input(z.object({ paymentId: id })).mutation(({ input }) => removeQuotePayment(input.paymentId)),
+
+  // Facturas de compras
+  purchases: adminProcedure.input(z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) })).query(({ input }) => listPurchases(input.month)),
+  purchaseSave: adminProcedure
+    .input(
+      z.object({
+        id: id.optional(),
+        supplier: z.string().trim().min(2, "Escribe el nombre del proveedor.").max(120),
+        invoiceNumber: z.string().trim().max(40).optional(),
+        invoiceDate: dayString,
+        category: z.enum(PURCHASE_CATEGORIES),
+        description: z.string().trim().max(300).optional(),
+        totalCents: cents.min(1, "El monto debe ser mayor que cero.").max(100_000_000),
+        paid: z.boolean(),
+        method: method.optional(),
+        reference: z.string().trim().max(80).optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) => savePurchase(input, ctx.user.id)),
+  purchaseRemove: adminProcedure.input(z.object({ id })).mutation(async ({ input }) => {
+    await db.delete(purchases).where(eq(purchases.id, input.id));
+    return { ok: true };
   }),
 });
 
 // ---------- Administración ----------
+const staffRole = z.enum(["cashier", "kitchen", "admin", "owner"]);
+const SENIOR = ["admin", "owner"];
+
+/** La cuenta del personal que se quiere tocar, si quien lo pide tiene permiso sobre ella. */
+async function staffTarget(actor: UserRow, targetId: number) {
+  const [target] = await db.select().from(users).where(eq(users.id, targetId));
+  if (!target || target.role === "member") fail("NOT_FOUND", "No encontramos a esa persona del equipo.");
+  if (SENIOR.includes(target.role) && actor.role !== "owner" && target.id !== actor.id) fail("FORBIDDEN", "Solo el súper admin puede cambiar la cuenta de un administrador.");
+  return target;
+}
+/** El negocio nunca se queda sin dueño: tiene que quedar al menos otro súper admin activo. */
+async function keepOneOwner(exceptId: number) {
+  const [others] = await db.select({ n: count() }).from(users).where(and(eq(users.role, "owner"), eq(users.active, true), ne(users.id, exceptId)));
+  if (others.n === 0) fail("CONFLICT", "Debe quedar al menos un súper admin activo.");
+}
+
 const configInput = z.object({
   rates: z.object({ pc: cents.min(0), ps5: cents.min(0), switch: cents.min(0), sim: cents.min(0) }),
   cardPriceCents: cents.min(0),
@@ -367,6 +442,7 @@ const adminRouter = router({
         category: z.string().trim().min(1, "Escribe la categoría (por ejemplo, Bebidas).").max(40),
         priceCents: cents.min(1, "El precio debe ser mayor que cero.").max(100_000),
         active: z.boolean(),
+        kitchen: z.boolean().default(true),
       }),
     )
     .mutation(async ({ input }) => {
@@ -412,7 +488,9 @@ const adminRouter = router({
     return rows.map((u) => ({ ...publicUser(u), active: u.active }));
   }),
 
-  staffCreate: adminProcedure.input(z.object({ name, phone, password, role: z.enum(["cashier", "admin"]) })).mutation(async ({ ctx, input }) => {
+  // Un administrador crea operadoras y cocina. Solo el súper admin crea administradores y otros súper admin.
+  staffCreate: adminProcedure.input(z.object({ name, phone, password, role: staffRole })).mutation(async ({ ctx, input }) => {
+    if (SENIOR.includes(input.role) && ctx.user.role !== "owner") fail("FORBIDDEN", "Solo el súper admin puede crear administradores.");
     const userId = await createUser({
       name: input.name,
       phone: input.phone,
@@ -423,8 +501,27 @@ const adminRouter = router({
     return { id: userId };
   }),
 
+  // Cambiar el tipo de usuario o ponerle una contraseña nueva a alguien del personal.
+  staffUpdate: adminProcedure.input(z.object({ id, role: staffRole.optional(), password: password.optional() })).mutation(async ({ ctx, input }) => {
+    const target = await staffTarget(ctx.user, input.id);
+    if (input.role && input.role !== target.role) {
+      if (target.id === ctx.user.id) fail("BAD_REQUEST", "No puedes cambiar tu propio tipo de usuario.");
+      if (SENIOR.includes(input.role) && ctx.user.role !== "owner") fail("FORBIDDEN", "Solo el súper admin puede nombrar administradores.");
+      if (target.role === "owner") await keepOneOwner(target.id);
+    }
+    await db
+      .update(users)
+      .set({ role: input.role ?? target.role, ...(input.password ? { passwordHash: await hashPassword(input.password) } : {}) })
+      .where(eq(users.id, target.id));
+    return { ok: true };
+  }),
+
   userSetActive: adminProcedure.input(z.object({ id, active: z.boolean() })).mutation(async ({ ctx, input }) => {
     if (input.id === ctx.user.id) fail("BAD_REQUEST", "No puedes desactivar tu propia cuenta.");
+    const [target] = await db.select().from(users).where(eq(users.id, input.id));
+    if (!target) fail("NOT_FOUND", "No encontramos esa cuenta.");
+    if (target.role !== "member") await staffTarget(ctx.user, input.id);
+    if (target.role === "owner" && !input.active) await keepOneOwner(target.id);
     await db.update(users).set({ active: input.active }).where(eq(users.id, input.id));
     return { ok: true };
   }),
@@ -464,6 +561,8 @@ export const appRouter = router({
   auth: authRouter,
   member: memberRouter,
   staff: staffRouter,
+  kitchen: kitchenRouter,
+  office: officeRouter,
   admin: adminRouter,
 });
 

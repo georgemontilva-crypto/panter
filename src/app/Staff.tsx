@@ -1,9 +1,13 @@
 import { lazy, Suspense, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { KIND_NAMES, METHODS, TX_LABEL, methodLabel, trpc, type BoardStation, type MethodId, type OrderRow, type StationKind } from "./api";
+import { KIND_NAMES, METHODS, ORDER_PROGRESS, ROLE_LABEL, TX_LABEL, canUseDesk, isSenior, methodLabel, trpc, type BoardStation, type MethodId, type OrderRow, type Role, type StationKind } from "./api";
 import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, clock, countdown, duration, parseMoney, ref, useNowTick, when } from "./ui";
 
 const Admin = lazy(() => import("./Admin"));
+const Kitchen = lazy(() => import("./Kitchen"));
+const Live = lazy(() => import("./Live"));
+const Parties = lazy(() => import("./Parties"));
+const Purchases = lazy(() => import("./Purchases"));
 // El lector de QR se descarga solo cuando se abre la cámara.
 const Scanner = lazy(() => import("./Scanner"));
 const KINDS: StationKind[] = ["pc", "ps5", "switch", "sim"];
@@ -26,10 +30,12 @@ function MenuSale({ userId, balanceCents, orders }: { userId: number; balanceCen
   const utils = trpc.useUtils();
   const menu = trpc.member.menu.useQuery(undefined, { staleTime: 30_000 });
   const [cart, setCart] = useState<Record<number, number>>({});
+  const [note, setNote] = useState("");
   const refresh = { onSuccess: () => utils.staff.invalidate() };
   const sell = trpc.staff.sell.useMutation({
     onSuccess: () => {
       setCart({});
+      setNote("");
       return utils.staff.invalidate();
     },
   });
@@ -99,6 +105,9 @@ function MenuSale({ userId, balanceCents, orders }: { userId: number; balanceCen
                 <span>Total</span>
                 <strong>{ref(total)}</strong>
               </p>
+              <Field label="Nota para cocina (opcional)">
+                <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={160} placeholder="Sin cebolla, para llevar…" />
+              </Field>
               {missing > 0 ? (
                 <Notice>Saldo insuficiente: le faltan {ref(missing)}. Recarga primero o quita algo del pedido.</Notice>
               ) : (
@@ -110,13 +119,14 @@ function MenuSale({ userId, balanceCents, orders }: { userId: number; balanceCen
           {sell.isSuccess && lines.length === 0 && (
             <Notice kind="ok">
               Orden #{sell.data.orderId} cobrada: {ref(sell.data.totalCents)}. Saldo nuevo: {ref(sell.data.balanceCents)}.
+              {sell.data.toKitchen && " La comanda ya está en cocina."}
             </Notice>
           )}
           <button
             className="btn"
             type="button"
             disabled={sell.isPending || lines.length === 0 || missing > 0}
-            onClick={() => sell.mutate({ userId, items: lines.map((p) => ({ productId: p.id, qty: cart[p.id] })) })}
+            onClick={() => sell.mutate({ userId, note, items: lines.map((p) => ({ productId: p.id, qty: cart[p.id] })) })}
           >
             {lines.length ? `Cobrar ${ref(total)} del saldo` : "Elige los productos del pedido"}
           </button>
@@ -133,7 +143,7 @@ function MenuSale({ userId, balanceCents, orders }: { userId: number; balanceCen
                   <strong>#{o.id}</strong> {o.items.map((i) => (i.qty > 1 ? `${i.qty} x ${i.name}` : i.name)).join(", ")}
                   <small>
                     {when(o.createdAt)}, {ref(o.totalCents)}
-                    {o.status === "refunded" ? ", anulada" : ""}
+                    {o.status === "refunded" ? ", anulada" : ORDER_PROGRESS[o.kitchenStatus] ? `, ${ORDER_PROGRESS[o.kitchenStatus].toLowerCase()}` : ""}
                   </small>
                 </span>
                 {o.status === "paid" && (
@@ -561,8 +571,16 @@ function Day() {
           <>
             <dl className="stats stats--wide">
               <div>
-                <dt>Entró a caja</dt>
+                <dt>Entró en total</dt>
                 <dd>{ref(d.cashInCents)}</dd>
+              </div>
+              <div>
+                <dt>Recargas y tarjetas</dt>
+                <dd>{ref(d.deskCents)}</dd>
+              </div>
+              <div>
+                <dt>Pagos de fiestas</dt>
+                <dd>{ref(d.partiesCents)}</dd>
               </div>
               <div>
                 <dt>Jugado</dt>
@@ -615,6 +633,26 @@ function Day() {
         )}
       </Panel>
       {d && (
+        <>
+          {d.partyPayments.length > 0 && (
+            <Panel title="Pagos de fiestas del día">
+              <ul className="rows">
+                {d.partyPayments.map((p) => (
+                  <li key={p.id}>
+                    <span className="rows__main">
+                      <strong>
+                        {p.code}, {p.customer}
+                      </strong>
+                      <small>
+                        {clock(p.createdAt)}, {methodLabel(p.method)}, lo recibió {p.staff}
+                      </small>
+                    </span>
+                    <span className="rows__side">{ref(p.amountCents)}</span>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          )}
         <Panel title="Movimientos del día">
           {d.moves.length === 0 ? (
             <p className="empty">No hubo movimientos este día.</p>
@@ -652,6 +690,7 @@ function Day() {
             </div>
           )}
         </Panel>
+        </>
       )}
     </div>
   );
@@ -699,15 +738,27 @@ function StaffLogin() {
 }
 
 // ---------- Panel ----------
-type Tab = "clientes" | "estaciones" | "cierre" | "ajustes";
+type Tab = "resumen" | "clientes" | "estaciones" | "cocina" | "fiestas" | "compras" | "cierre" | "ajustes";
+
+// Qué secciones ve cada tipo de usuario. El servidor aplica los mismos permisos: esto solo decide qué se muestra.
+const TABS: { id: Tab; label: string; for: Role[] }[] = [
+  { id: "resumen", label: "Resumen", for: ["owner", "admin"] },
+  { id: "clientes", label: "Clientes", for: ["owner", "admin", "cashier"] },
+  { id: "estaciones", label: "Máquinas", for: ["owner", "admin", "cashier"] },
+  { id: "cocina", label: "Cocina", for: ["owner", "admin", "cashier", "kitchen"] },
+  { id: "fiestas", label: "Fiestas", for: ["owner", "admin"] },
+  { id: "compras", label: "Compras", for: ["owner", "admin"] },
+  { id: "cierre", label: "Cierre", for: ["owner", "admin"] },
+  { id: "ajustes", label: "Ajustes", for: ["owner", "admin"] },
+];
 
 export default function Staff() {
   const utils = trpc.useUtils();
   const me = trpc.auth.me.useQuery(undefined, { retry: false });
   const logout = trpc.auth.logout.useMutation({ onSuccess: () => utils.invalidate() });
-  const [tab, setTab] = useState<Tab>("clientes");
+  const [picked, setPicked] = useState<Tab | null>(null);
 
-  if (me.isLoading) return <Shell title="Caja">{<p className="empty">Cargando…</p>}</Shell>;
+  if (me.isLoading) return <Shell title="Personal">{<p className="empty">Cargando…</p>}</Shell>;
   if (!me.data) {
     return (
       <Shell title="Personal">
@@ -737,40 +788,49 @@ export default function Staff() {
     );
   }
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: "clientes", label: "Clientes" },
-    { id: "estaciones", label: "Estaciones" },
-    { id: "cierre", label: "Cierre" },
-    ...(me.data.role === "admin" ? [{ id: "ajustes" as Tab, label: "Ajustes" }] : []),
-  ];
+  const role = me.data.role;
+  const tabs = TABS.filter((t) => t.for.includes(role));
+  // Cada quien abre en lo suyo: el dueño en el resumen, la operadora en clientes, cocina en sus comandas.
+  const tab = picked && tabs.some((t) => t.id === picked) ? picked : tabs[0].id;
+  const go = (next: Tab) => {
+    setPicked(next);
+    window.scrollTo({ top: 0 });
+  };
 
   return (
     <Shell
-      title="Caja"
+      title={role === "kitchen" ? "Cocina" : canUseDesk(role) && !isSenior(role) ? "Caja" : "Panel"}
       right={
         <>
-          <span className="app__user">{me.data.name}</span>
+          <span className="app__user">
+            {me.data.name}
+            <small>{ROLE_LABEL[role]}</small>
+          </span>
           <button className="app__link" type="button" onClick={() => logout.mutate()}>
             Salir
           </button>
         </>
       }
     >
-      <div className="tabs tabs--page" role="tablist" aria-label="Secciones del panel">
-        {tabs.map((t) => (
-          <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} className={tab === t.id ? "is-active" : undefined} onClick={() => setTab(t.id)}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-      {tab === "clientes" && <Clients />}
-      {tab === "estaciones" && <Stations />}
-      {tab === "cierre" && <Day />}
-      {tab === "ajustes" && (
-        <Suspense fallback={<p className="empty">Cargando…</p>}>
-          <Admin />
-        </Suspense>
+      {tabs.length > 1 && (
+        <div className="tabs tabs--page" role="tablist" aria-label="Secciones del panel">
+          {tabs.map((t) => (
+            <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} className={tab === t.id ? "is-active" : undefined} onClick={() => go(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </div>
       )}
+      <Suspense fallback={<p className="empty">Cargando…</p>}>
+        {tab === "resumen" && <Live go={go} />}
+        {tab === "clientes" && <Clients />}
+        {tab === "estaciones" && <Stations />}
+        {tab === "cocina" && <Kitchen />}
+        {tab === "fiestas" && <Parties />}
+        {tab === "compras" && <Purchases />}
+        {tab === "cierre" && <Day />}
+        {tab === "ajustes" && <Admin />}
+      </Suspense>
     </Shell>
   );
 }

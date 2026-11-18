@@ -27,8 +27,17 @@ export function duration(minutes: number): string {
 
 const dateFmt = new Intl.DateTimeFormat("es-VE", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: "America/Caracas" });
 const timeFmt = new Intl.DateTimeFormat("es-VE", { hour: "numeric", minute: "2-digit", timeZone: "America/Caracas" });
+const dayFmt = new Intl.DateTimeFormat("es-VE", { weekday: "long", day: "numeric", month: "long", timeZone: "America/Caracas" });
 export const when = (ms: number) => dateFmt.format(ms);
 export const clock = (ms: number) => timeFmt.format(ms);
+/** "sábado, 5 de diciembre" */
+export const dayName = (ms: number) => dayFmt.format(ms);
+
+// Los campos de fecha del navegador no saben de zonas horarias: aquí todo se lee y se guarda en hora de Maracaibo (UTC-4).
+const CARACAS_MS = 4 * 60 * 60 * 1000;
+export const toLocalInput = (ms: number | null) => (ms ? new Date(ms - CARACAS_MS).toISOString().slice(0, 16) : "");
+export const fromLocalInput = (value: string) => (value ? Date.parse(`${value}:00Z`) + CARACAS_MS : null);
+export const todayInput = () => new Date(Date.now() - CARACAS_MS).toISOString().slice(0, 10);
 
 // ---------- Reloj ----------
 export function useNowTick(intervalMs = 1000): number {
@@ -167,3 +176,39 @@ export const STATE_LABEL: Record<string, string> = {
   deshabilitada: "Deshabilitada",
   mantenimiento: "Mantenimiento",
 };
+
+// ---------- Documento para imprimir o guardar como PDF ----------
+// Muestra la hoja en pantalla, tal como saldrá, y al imprimir solo sale la hoja.
+export function DocSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    document.body.classList.add("no-scroll");
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.classList.remove("no-scroll");
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+  return (
+    <div className="sheet" role="dialog" aria-modal="true" aria-label={title}>
+      {/* La tarjeta de afiliación se imprime en su tamaño; un documento va en hoja normal. */}
+      <style>{"@media print { @page { size: auto; margin: 14mm; } }"}</style>
+      <div className="sheet__bar">
+        <h2>{title}</h2>
+        <button className="btn btn--small" type="button" onClick={() => window.print()}>
+          Imprimir o guardar PDF
+        </button>
+        <button className="btn btn--ghost btn--small" type="button" onClick={onClose}>
+          Cerrar
+        </button>
+      </div>
+      <div className="sheet__scroll">
+        <div className="sheet__paper print-doc">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+export function Badge({ tone = "plain", children }: { tone?: "plain" | "ok" | "warn" | "hot" | "off"; children: ReactNode }) {
+  return <span className={`badge badge--${tone}`}>{children}</span>;
+}

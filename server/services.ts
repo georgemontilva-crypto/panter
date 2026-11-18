@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import { db, type Tx } from "./db";
-import { PAY_METHODS, STATION_KINDS, TX_TYPES, orderItems, orders, products, sessions, settings, stations, users, visits, walletTx } from "./db/schema";
+import { KITCHEN_STATES, PAY_METHODS, ROLES, STATION_KINDS, TX_TYPES, orderItems, orders, products, sessions, settings, stations, users, visits, walletTx } from "./db/schema";
 import { hours as defaultHours } from "../src/content";
 import { closingAt, closingProblem, sellableMinutes, type WeekHours } from "./closing";
 import { MINUTE, caracasDate, fail, newCardToken, newMemberCode, newPairCode, now } from "./lib";
@@ -112,7 +112,7 @@ export async function createUser(values: {
   phone: string | null;
   email?: string | null;
   passwordHash?: string | null;
-  role?: "member" | "cashier" | "admin";
+  role?: (typeof ROLES)[number];
   createdBy?: number | null;
 }) {
   if (values.phone) {
@@ -369,7 +369,7 @@ export async function endSession(input: { sessionId: number; staffId: number | n
 }
 
 // ---------- Compras del menú con el saldo ----------
-export async function createOrder(input: { userId: number; staffId: number; items: { productId: number; qty: number }[] }) {
+export async function createOrder(input: { userId: number; staffId: number; items: { productId: number; qty: number }[]; note?: string }) {
   const config = await getConfig();
   const ids = [...new Set(input.items.map((i) => i.productId))];
   const found = await db.select().from(products).where(inArray(products.id, ids));
@@ -380,14 +380,18 @@ export async function createOrder(input: { userId: number; staffId: number; item
   const lines = [...quantities].map(([productId, qty]) => {
     const product = byId.get(productId);
     if (!product || !product.active) fail("BAD_REQUEST", "Uno de los productos ya no está en el menú. Actualiza la página y arma el pedido de nuevo.");
-    return { productId, name: product.name, unitCents: product.priceCents, qty };
+    return { productId, name: product.name, unitCents: product.priceCents, qty, kitchen: product.kitchen };
   });
+  // Si algo del pedido se prepara en cocina, la orden entra como comanda pendiente.
+  const kitchenStatus = lines.some((line) => line.kitchen) ? ("pending" as const) : ("none" as const);
   const total = lines.reduce((sum, line) => sum + line.unitCents * line.qty, 0);
   if (total <= 0) fail("BAD_REQUEST", "El pedido está vacío.");
   const summary = lines.map((l) => (l.qty > 1 ? `${l.qty} x ${l.name}` : l.name)).join(", ");
 
   return userTx(input.userId, async (tx) => {
-    const [created] = await tx.insert(orders).values({ userId: input.userId, staffId: input.staffId, totalCents: total, createdAt: now() });
+    const [created] = await tx
+      .insert(orders)
+      .values({ userId: input.userId, staffId: input.staffId, totalCents: total, createdAt: now(), kitchenStatus, note: input.note?.trim() || null });
     const orderId = created.insertId;
     await tx.insert(orderItems).values(lines.map((line) => ({ ...line, orderId })));
     // Si el saldo no alcanza, ledger() falla y la transacción entera se deshace: no queda orden ni cobro.
@@ -401,10 +405,11 @@ export async function createOrder(input: { userId: number; staffId: number; item
     });
     // Comprar en el mostrador también cuenta como la visita del día.
     const firstVisitToday = await recordVisit(tx, input.userId, "checkin", config);
-    if (!firstVisitToday) return { orderId, totalCents: total, balanceCents };
+    const toKitchen = kitchenStatus === "pending";
+    if (!firstVisitToday) return { orderId, totalCents: total, balanceCents, toKitchen };
     // La visita pudo acreditar un bono de fidelidad: se devuelve el saldo ya con el bono.
     const [user] = await tx.select({ balance: users.balanceCents }).from(users).where(eq(users.id, input.userId));
-    return { orderId, totalCents: total, balanceCents: user.balance };
+    return { orderId, totalCents: total, balanceCents: user.balance, toKitchen };
   });
 }
 
@@ -447,9 +452,60 @@ export async function recentOrders(filter: { userId?: number; from?: number; to?
     userId: order.userId,
     totalCents: order.totalCents,
     status: order.status,
+    kitchenStatus: order.kitchenStatus,
     createdAt: order.createdAt,
     items: items.filter((i) => i.orderId === order.id).map((i) => ({ name: i.name, qty: i.qty, unitCents: i.unitCents })),
   }));
+}
+
+// ---------- Comandas de cocina ----------
+export type KitchenState = (typeof KITCHEN_STATES)[number];
+
+/** Lo que cocina tiene por delante (por preparar, en preparación, listas) y lo último entregado. */
+export async function kitchenBoard() {
+  const open = await db
+    .select()
+    .from(orders)
+    .where(and(eq(orders.status, "paid"), inArray(orders.kitchenStatus, ["pending", "preparing", "ready"])))
+    .orderBy(orders.id);
+  const done = await db
+    .select()
+    .from(orders)
+    .where(and(eq(orders.status, "paid"), eq(orders.kitchenStatus, "delivered"), gt(orders.deliveredAt, now() - 3 * 60 * MINUTE)))
+    .orderBy(desc(orders.deliveredAt))
+    .limit(8);
+  const rows = [...open, ...done];
+  if (!rows.length) return [];
+  const [items, people] = await Promise.all([
+    db.select().from(orderItems).where(inArray(orderItems.orderId, rows.map((r) => r.id))),
+    namesOf([...new Set(rows.map((r) => r.userId))]),
+  ]);
+  return rows.map((order) => ({
+    id: order.id,
+    kitchenStatus: order.kitchenStatus,
+    note: order.note,
+    createdAt: order.createdAt,
+    readyAt: order.readyAt,
+    deliveredAt: order.deliveredAt,
+    customer: people.get(order.userId) ?? "",
+    items: items.filter((i) => i.orderId === order.id).map((i) => ({ name: i.name, qty: i.qty, kitchen: i.kitchen })),
+  }));
+}
+
+export async function setKitchenStatus(orderId: number, to: Exclude<KitchenState, "none">) {
+  const [order] = await db.select().from(orders).where(eq(orders.id, orderId));
+  if (!order) fail("NOT_FOUND", "No encontramos esa comanda.");
+  if (order.status !== "paid") fail("CONFLICT", "Esa orden fue anulada: ya no hay que prepararla.");
+  if (order.kitchenStatus === "none") fail("BAD_REQUEST", "Esa orden no lleva nada de cocina.");
+  await db
+    .update(orders)
+    .set({
+      kitchenStatus: to,
+      readyAt: to === "ready" ? now() : to === "delivered" ? (order.readyAt ?? now()) : null,
+      deliveredAt: to === "delivered" ? now() : null,
+    })
+    .where(eq(orders.id, orderId));
+  return { ok: true };
 }
 
 export const activeMenu = () => db.select().from(products).where(eq(products.active, true)).orderBy(products.category, products.name);

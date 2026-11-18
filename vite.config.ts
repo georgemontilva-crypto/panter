@@ -12,7 +12,7 @@ function serviceWorker(): Plugin {
     apply: "build",
     generateBundle(_options, bundle) {
       const assets = Object.keys(bundle).map((file) => `/${file}`);
-      const core = assets.filter((file) => /\.(js|css)$/.test(file) && !/\/(Scanner|Admin)-/.test(file));
+      const core = assets.filter((file) => /\.(js|css)$/.test(file) && !/\/(Scanner|Admin|Kitchen|Live|Parties|Purchases)-/.test(file));
       const font = assets.filter((file) => /saira-latin-wdth[^/]*\.woff2$/.test(file));
       const precache = ["/index.html", "/manifest.webmanifest", "/icon-192.png", ...core, ...font];
       const version = createHash("sha256").update(assets.sort().join("|")).digest("hex").slice(0, 10);

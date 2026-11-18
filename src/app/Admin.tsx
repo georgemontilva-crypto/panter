@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { KIND_NAMES, trpc, type Config, type StationKind } from "./api";
-import { Field, Notice, Panel, STATE_LABEL, money, parseMoney, ref, when } from "./ui";
+import { KIND_NAMES, ROLE_ABOUT, ROLE_LABEL, trpc, type Config, type Role, type StationKind } from "./api";
+import { Badge, Field, Notice, Panel, STATE_LABEL, money, parseMoney, ref, when } from "./ui";
 
 const KINDS: StationKind[] = ["pc", "ps5", "switch", "sim"];
 const DAYS = [
@@ -265,7 +265,7 @@ function StationsAdmin() {
 }
 
 // ---------- Menú ----------
-function ProductRow({ product }: { product: { id: number; name: string; category: string; priceCents: number; active: boolean } }) {
+function ProductRow({ product }: { product: { id: number; name: string; category: string; priceCents: number; active: boolean; kitchen: boolean } }) {
   const utils = trpc.useUtils();
   const save = trpc.admin.productSave.useMutation({ onSuccess: () => Promise.all([utils.admin.products.invalidate(), utils.member.menu.invalidate()]) });
   const [price, setPrice] = useState(money(product.priceCents));
@@ -284,6 +284,9 @@ function ProductRow({ product }: { product: { id: number; name: string; category
             Guardar precio
           </button>
         )}
+        <button type="button" disabled={save.isPending} onClick={() => save.mutate({ ...product, kitchen: !product.kitchen })}>
+          {product.kitchen ? "Pasa por cocina: sí" : "Pasa por cocina: no"}
+        </button>
         <button type="button" disabled={save.isPending} onClick={() => save.mutate({ ...product, active: !product.active })}>
           {product.active ? "Quitar del menú" : "Volver a ofrecer"}
         </button>
@@ -296,22 +299,24 @@ function ProductRow({ product }: { product: { id: number; name: string; category
 function ProductsAdmin() {
   const utils = trpc.useUtils();
   const list = trpc.admin.products.useQuery();
-  const [form, setForm] = useState({ name: "", category: "", price: "" });
+  const [form, setForm] = useState({ name: "", category: "", price: "", kitchen: true });
   const create = trpc.admin.productSave.useMutation({
     onSuccess: () => {
-      setForm({ name: "", category: form.category, price: "" });
+      setForm({ name: "", category: form.category, price: "", kitchen: form.kitchen });
       return Promise.all([utils.admin.products.invalidate(), utils.member.menu.invalidate()]);
     },
   });
   const cents = parseMoney(form.price);
   return (
     <Panel title="Menú del mostrador">
-      <p className="panel__lead">Lo que se puede cobrar con el saldo de la tarjeta: comida, bebidas, lo que vendan en la arena.</p>
+      <p className="panel__lead">
+        Lo que se puede cobrar con el saldo de la tarjeta. Lo que pasa por cocina genera una comanda al cobrarlo; lo que se entrega de una vez (un refresco de la nevera) no.
+      </p>
       <form
         className="form form--inline"
         onSubmit={(e) => {
           e.preventDefault();
-          if (cents !== null) create.mutate({ name: form.name, category: form.category, priceCents: cents, active: true });
+          if (cents !== null) create.mutate({ name: form.name, category: form.category, priceCents: cents, active: true, kitchen: form.kitchen });
         }}
       >
         <Field label="Producto">
@@ -323,6 +328,10 @@ function ProductsAdmin() {
         <Field label="Precio en REF">
           <input value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} inputMode="decimal" placeholder="3,50" required />
         </Field>
+        <label className="check">
+          <input type="checkbox" checked={form.kitchen} onChange={(e) => setForm({ ...form, kitchen: e.target.checked })} />
+          Se prepara en cocina
+        </label>
         <button className="btn btn--small" type="submit" disabled={create.isPending || cents === null}>
           Agregar al menú
         </button>
@@ -341,7 +350,7 @@ function ProductsAdmin() {
             </thead>
             <tbody>
               {list.data.map((p) => (
-                <ProductRow key={`${p.id}-${p.priceCents}-${p.active}`} product={{ id: p.id, name: p.name, category: p.category, priceCents: p.priceCents, active: p.active }} />
+                <ProductRow key={`${p.id}-${p.priceCents}-${p.active}-${p.kitchen}`} product={{ id: p.id, name: p.name, category: p.category, priceCents: p.priceCents, active: p.active, kitchen: p.kitchen }} />
               ))}
             </tbody>
           </table>
@@ -352,21 +361,108 @@ function ProductsAdmin() {
 }
 
 // ---------- Personal ----------
-function StaffAdmin() {
+type StaffRole = Exclude<Role, "member">;
+const STAFF_ROLES: StaffRole[] = ["cashier", "kitchen", "admin", "owner"];
+
+function StaffRow({ user, me }: { user: { id: number; name: string; phone: string | null; role: Role; active: boolean }; me: { id: number; role: Role } }) {
   const utils = trpc.useUtils();
-  const list = trpc.admin.staffList.useQuery();
   const refresh = { onSuccess: () => utils.admin.staffList.invalidate() };
-  const create = trpc.admin.staffCreate.useMutation({
+  const update = trpc.admin.staffUpdate.useMutation({
     onSuccess: () => {
-      setForm({ name: "", phone: "", password: "", role: "cashier" });
+      setPassword(null);
       return utils.admin.staffList.invalidate();
     },
   });
   const setActive = trpc.admin.userSetActive.useMutation(refresh);
-  const [form, setForm] = useState({ name: "", phone: "", password: "", role: "cashier" as "cashier" | "admin" });
+  const [password, setPassword] = useState<string | null>(null);
+  const senior = user.role === "admin" || user.role === "owner";
+  const isMe = user.id === me.id;
+  // Un administrador maneja operadoras y cocina; las cuentas de administradores y del dueño las maneja el súper admin.
+  const canManage = me.role === "owner" || !senior;
+  const roles = STAFF_ROLES.filter((r) => me.role === "owner" || (r !== "admin" && r !== "owner"));
+  return (
+    <li className={user.active ? undefined : "is-off"}>
+      <div className="team__who">
+        <strong>
+          {user.name}
+          {isMe ? " (tú)" : ""}
+        </strong>
+        <small>{user.phone}</small>
+      </div>
+      <div className="team__role">
+        <Badge tone={user.role === "owner" ? "hot" : senior ? "ok" : "plain"}>{ROLE_LABEL[user.role]}</Badge>
+        {!user.active && <Badge tone="off">Desactivado</Badge>}
+        <small>{ROLE_ABOUT[user.role as StaffRole]}</small>
+      </div>
+      {canManage && (
+        <div className="team__actions">
+          {!isMe && (
+            <label className="team__pick">
+              <span>Tipo de usuario</span>
+              <select value={user.role} disabled={update.isPending} onChange={(e) => update.mutate({ id: user.id, role: e.target.value as StaffRole })}>
+                {roles.map((r) => (
+                  <option key={r} value={r}>
+                    {ROLE_LABEL[r]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {password === null ? (
+            <button className="app__link" type="button" onClick={() => setPassword("")}>
+              Cambiar contraseña
+            </button>
+          ) : (
+            <form
+              className="team__password"
+              onSubmit={(e) => {
+                e.preventDefault();
+                update.mutate({ id: user.id, password });
+              }}
+            >
+              <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="new-password" placeholder="Contraseña nueva" aria-label={`Contraseña nueva de ${user.name}`} minLength={6} required />
+              <button className="btn btn--small" type="submit" disabled={update.isPending}>
+                Guardar
+              </button>
+              <button className="app__link" type="button" onClick={() => setPassword(null)}>
+                Cancelar
+              </button>
+            </form>
+          )}
+          {!isMe && (
+            <button className="app__link" type="button" disabled={setActive.isPending} onClick={() => setActive.mutate({ id: user.id, active: !user.active })}>
+              {user.active ? "Desactivar" : "Reactivar"}
+            </button>
+          )}
+        </div>
+      )}
+      {(update.error || setActive.error) && <Notice>{update.error?.message ?? setActive.error?.message}</Notice>}
+      {update.isSuccess && password === null && <Notice kind="ok">Cambio guardado.</Notice>}
+    </li>
+  );
+}
+
+function StaffAdmin() {
+  const utils = trpc.useUtils();
+  const me = trpc.auth.me.useQuery(undefined, { retry: false });
+  const list = trpc.admin.staffList.useQuery();
+  const empty = { name: "", phone: "", password: "", role: "cashier" as StaffRole };
+  const [form, setForm] = useState(empty);
+  const create = trpc.admin.staffCreate.useMutation({
+    onSuccess: () => {
+      setForm(empty);
+      return utils.admin.staffList.invalidate();
+    },
+  });
+  if (!me.data) return null;
+  const roles = STAFF_ROLES.filter((r) => me.data!.role === "owner" || (r !== "admin" && r !== "owner"));
 
   return (
-    <Panel title="Personal">
+    <Panel title="Usuarios del personal">
+      <p className="panel__lead">
+        Cada persona entra por /caja con su teléfono y su contraseña, y solo ve lo que le toca según su tipo de usuario.
+        {me.data.role !== "owner" && " Las cuentas de administradores las maneja el súper admin."}
+      </p>
       <form
         className="form form--inline"
         onSubmit={(e) => {
@@ -378,40 +474,30 @@ function StaffAdmin() {
           <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
         </Field>
         <Field label="Teléfono">
-          <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} type="tel" required />
+          <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} type="tel" inputMode="tel" required />
         </Field>
         <Field label="Contraseña">
           <input value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} type="password" autoComplete="new-password" required />
         </Field>
-        <Field label="Rol">
-          <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as "cashier" | "admin" })}>
-            <option value="cashier">Cajero</option>
-            <option value="admin">Administrador</option>
+        <Field label="Tipo de usuario" hint={ROLE_ABOUT[form.role]}>
+          <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as StaffRole })}>
+            {roles.map((r) => (
+              <option key={r} value={r}>
+                {ROLE_LABEL[r]}
+              </option>
+            ))}
           </select>
         </Field>
         <button className="btn btn--small" type="submit" disabled={create.isPending}>
           Crear usuario
         </button>
       </form>
-      <Notice>{create.error?.message ?? setActive.error?.message}</Notice>
-      <div className="table-wrap">
-        <table className="table">
-          <tbody>
-            {list.data?.map((u) => (
-              <tr key={u.id}>
-                <td>{u.name}</td>
-                <td>{u.phone}</td>
-                <td>{u.role === "admin" ? "Administrador" : "Cajero"}</td>
-                <td className="actions">
-                  <button type="button" onClick={() => setActive.mutate({ id: u.id, active: !u.active })}>
-                    {u.active ? "Desactivar" : "Reactivar"}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <Notice>{create.error?.message}</Notice>
+      <ul className="team">
+        {list.data?.map((u) => (
+          <StaffRow key={u.id} user={u} me={me.data!} />
+        ))}
+      </ul>
     </Panel>
   );
 }

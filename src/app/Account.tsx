@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
-import { TX_LABEL, trpc, type MemberHome } from "./api";
+import { TX_LABEL, trpc, type MemberHome, ORDER_PROGRESS } from "./api";
 import { isIos, isStandalone, useInstallPrompt } from "../pwa";
 import PayCard from "./PayCard";
 import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, clock, countdown, duration, ref, useNowTick, when } from "./ui";
@@ -381,6 +381,9 @@ function MenuAndOrders({ home, offline, onPay }: { home: MemberHome; offline: bo
                     {when(o.createdAt)}, {o.items.map((i) => (i.qty > 1 ? `${i.qty} x ${i.name}` : i.name)).join(", ")}
                     {o.status === "refunded" ? " (anulada y devuelta)" : ""}
                   </small>
+                  {o.status === "paid" && ORDER_PROGRESS[o.kitchenStatus] && o.kitchenStatus !== "delivered" && (
+                    <small className={`moves__state${o.kitchenStatus === "ready" ? " is-ready" : ""}`}>{ORDER_PROGRESS[o.kitchenStatus]}</small>
+                  )}
                 </span>
                 <span className="moves__amount">{ref(o.totalCents)}</span>
               </li>

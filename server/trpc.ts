@@ -26,12 +26,20 @@ export const memberProcedure = t.procedure.use(({ ctx, next }) => {
   return next({ ctx: { ...ctx, user: ctx.user } });
 });
 
-export const staffProcedure = memberProcedure.use(({ ctx, next }) => {
-  if (ctx.user.role === "member") throw new TRPCError({ code: "FORBIDDEN", message: "Esta sección es solo para el personal." });
-  return next();
-});
+type Role = NonNullable<Context["user"]>["role"];
+const only = (roles: Role[], message: string) =>
+  memberProcedure.use(({ ctx, next }) => {
+    if (!roles.includes(ctx.user.role)) throw new TRPCError({ code: "FORBIDDEN", message });
+    return next();
+  });
 
-export const adminProcedure = memberProcedure.use(({ ctx, next }) => {
-  if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Solo un administrador puede hacer esto." });
-  return next();
-});
+// Quién puede qué. Cada ruta del servidor usa uno de estos permisos, así que ocultar un botón en pantalla
+// nunca es lo único que protege: el servidor rechaza a quien no tenga el tipo de usuario correcto.
+/** Caja y máquinas: operadoras, administradores y súper admin. */
+export const deskProcedure = only(["cashier", "admin", "owner"], "Esta sección es para operadoras y administradores.");
+/** Comandas: cocina, y también quien las entrega o supervisa. */
+export const kitchenProcedure = only(["kitchen", "cashier", "admin", "owner"], "Esta sección es para cocina y caja.");
+/** Ventas, cotizaciones, compras y ajustes: administradores y súper admin. */
+export const adminProcedure = only(["admin", "owner"], "Solo un administrador puede hacer esto.");
+/** Solo el dueño. */
+export const ownerProcedure = only(["owner"], "Solo el súper admin puede hacer esto.");

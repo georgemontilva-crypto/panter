@@ -20,20 +20,32 @@ app.disable("x-powered-by");
 app.use(compression());
 app.use(express.json({ limit: "100kb" }));
 
-async function bootstrapAdmin() {
-  const [admins] = await db.select({ n: count() }).from(users).where(eq(users.role, "admin"));
-  if (admins.n > 0) return;
+// El negocio siempre tiene un súper admin (el dueño).
+// - Instalación nueva: se crea con ADMIN_PHONE y ADMIN_PASSWORD.
+// - Instalación que ya tenía administradores de antes de existir los tipos de usuario: el de ADMIN_PHONE
+//   (o, si no está, el administrador más antiguo) pasa a ser el súper admin. Los demás siguen como administradores.
+async function bootstrapOwner() {
+  const [owners] = await db.select({ n: count() }).from(users).where(eq(users.role, "owner"));
+  if (owners.n > 0) return;
+  const admins = await db.select().from(users).where(eq(users.role, "admin")).orderBy(users.id);
+  const fromEnv = env.adminPhone ? admins.find((u) => u.phone === normalizePhone(env.adminPhone!)) : undefined;
+  const promoted = fromEnv ?? admins[0];
+  if (promoted) {
+    await db.update(users).set({ role: "owner" }).where(eq(users.id, promoted.id));
+    console.log(`[panter] ${promoted.name} ahora es el súper admin.`);
+    return;
+  }
   if (!env.adminPhone || !env.adminPassword) {
-    console.warn("[panter] No hay administrador. Define ADMIN_PHONE y ADMIN_PASSWORD para crear el primero.");
+    console.warn("[panter] No hay súper admin. Define ADMIN_PHONE y ADMIN_PASSWORD para crear el primero.");
     return;
   }
   await createUser({
     name: env.adminName,
     phone: normalizePhone(env.adminPhone),
     passwordHash: await hashPassword(env.adminPassword),
-    role: "admin",
+    role: "owner",
   });
-  console.log("[panter] Administrador inicial creado.");
+  console.log("[panter] Súper admin inicial creado.");
 }
 
 app.get("/api/health", (_req, res) => {
@@ -42,7 +54,7 @@ app.get("/api/health", (_req, res) => {
 
 if (accountsEnabled()) {
   await initDb();
-  await bootstrapAdmin();
+  await bootstrapOwner();
   app.use("/api/agent", agentRouter);
   // Horario vigente para la portada (el que se edita en Caja → Ajustes).
   app.get("/api/public/schedule", async (_req, res) => {
