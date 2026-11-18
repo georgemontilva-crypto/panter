@@ -1,9 +1,9 @@
 import { Suspense, lazy, useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
-import { TX_LABEL, trpc, type MemberHome, ORDER_PROGRESS } from "./api";
+import { KIND_NAMES, ORDER_PROGRESS, TX_LABEL, creditMinutes, priceOf, trpc, type MemberHome } from "./api";
 import { isIos, isStandalone, useInstallPrompt } from "../pwa";
 import PayCard from "./PayCard";
-import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, clock, countdown, duration, ref, useNowTick, when } from "./ui";
+import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, clock, countdown, duration, ref, useNowTick, when, priceLabel } from "./ui";
 
 const Scanner = lazy(() => import("./Scanner"));
 
@@ -120,6 +120,9 @@ function ActiveSession({ home, session }: { home: MemberHome; session: MemberHom
   const end = trpc.member.end.useMutation(refresh);
   const inGrace = now >= session.endsAt;
   const rate = home.rates[session.kind];
+  const credit = creditMinutes(home.timeCredits, session.kind);
+  // Lo que quedaría guardado si termina en este momento.
+  const unused = Math.max(0, Math.round((session.endsAt - now) / 60_000));
   // Se puede agregar tiempo solo si la sesión sigue terminando antes del cierre (con 5 min de tolerancia).
   const fits = (m: number) => Math.max(now, session.endsAt) + m * 60_000 <= home.closing.closesAt + 5 * 60_000;
   const canExtend = fits(30);
@@ -139,13 +142,13 @@ function ActiveSession({ home, session }: { home: MemberHome; session: MemberHom
       <div className="live__actions">
         {[30, 60].filter(fits).map((m) => (
           <button key={m} className="btn" type="button" disabled={extend.isPending} onClick={() => extend.mutate({ sessionId: session.id, minutes: m })}>
-            Agregar {duration(m)} ({ref(Math.round((rate * m) / 60))})
+            Agregar {duration(m)} ({priceLabel(priceOf(rate, m, credit))})
           </button>
         ))}
         {!inGrace &&
           (confirmEnd ? (
             <button className="btn btn--ghost" type="button" disabled={end.isPending} onClick={() => end.mutate({ sessionId: session.id })}>
-              Sí, terminar y devolver lo no usado
+              {unused > 0 ? `Sí, terminar y guardar ${duration(unused)} a favor` : "Sí, terminar"}
             </button>
           ) : (
             <button className="btn btn--ghost" type="button" onClick={() => setConfirmEnd(true)}>
@@ -153,6 +156,7 @@ function ActiveSession({ home, session }: { home: MemberHome; session: MemberHom
             </button>
           ))}
       </div>
+      {confirmEnd && !inGrace && unused > 0 && <p className="live__hint">No se devuelve dinero: el tiempo que no uses queda guardado y se gasta primero la próxima vez que juegues.</p>}
       {!canExtend && <Notice kind="info">Cerramos a las {clock(home.closing.closesAt)}: ya no se puede agregar más tiempo hoy.</Notice>}
       <Notice>{extend.error?.message ?? end.error?.message}</Notice>
     </Panel>
@@ -223,7 +227,9 @@ function ActivatePc({ home }: { home: MemberHome }) {
   }, [options.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pc = pcs.data?.find((p) => p.id === selected) ?? null;
-  const cost = Math.round((home.rates.pc * minutes) / 60);
+  // El tiempo a favor en PC se gasta primero; solo se descuenta del saldo lo que falte.
+  const price = priceOf(home.rates.pc, minutes, creditMinutes(home.timeCredits, "pc"));
+  const cost = price.costCents;
   const enough = home.balanceCents >= cost;
 
   if (pcs.data && pcs.data.length === 0) {
@@ -315,9 +321,11 @@ function ActivatePc({ home }: { home: MemberHome }) {
           </fieldset>
           {limited && <p className="form__lead">Hoy cerramos a las {clock(home.closing.closesAt)}: solo aparecen los tiempos que terminan antes.</p>}
           <p className="activate__sum">
-            {home.rates.pc
-              ? `Se descuentan ${ref(cost)} de tu saldo. Te quedan ${ref(Math.max(0, home.balanceCents - cost))}.`
-              : "La tarifa de las PC todavía no está configurada. Avisa en caja."}
+            {!home.rates.pc
+              ? "La tarifa de las PC todavía no está configurada. Avisa en caja."
+              : price.fromCredit === minutes
+                ? `No pagas nada: usas ${duration(price.fromCredit)} de tu tiempo a favor.`
+                : `${price.fromCredit ? `Usas ${duration(price.fromCredit)} de tu tiempo a favor. ` : ""}Se descuentan ${ref(cost)} de tu saldo. Te quedan ${ref(Math.max(0, home.balanceCents - cost))}.`}
           </p>
           {!enough && home.rates.pc > 0 && <Notice kind="info">Te faltan {ref(cost - home.balanceCents)}. Recarga en caja o elige menos tiempo.</Notice>}
           <Notice>{start.error?.message}</Notice>
@@ -541,6 +549,21 @@ function Wallet({ home, offlineSince }: { home: MemberHome; offlineSince?: numbe
                   {toBonus !== null && ` En ${toBonus} ${toBonus === 1 ? "visita" : "visitas"} más ganas ${ref(home.loyalty.bonusCents)} de bono.`}
                 </p>
               </Panel>
+              {home.timeCredits.length > 0 && (
+                <Panel title="Tiempo a favor" className="credits">
+                  <ul className="rows">
+                    {home.timeCredits.map((c) => (
+                      <li key={c.kind}>
+                        <span className="rows__main">
+                          <strong>{KIND_NAMES[c.kind]}</strong>
+                        </span>
+                        <span className="rows__side">{duration(c.minutes)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="form__lead">Es tiempo que pagaste y no usaste. Se gasta primero la próxima vez que juegues, antes de tocar tu saldo.</p>
+                </Panel>
+              )}
               <InstallApp />
             </div>
           </div>
@@ -576,7 +599,7 @@ function Wallet({ home, offlineSince }: { home: MemberHome; offlineSince?: numbe
                   </span>
                   <span className={`moves__amount${t.amountCents > 0 ? " is-plus" : ""}`}>
                     {t.amountCents > 0 ? "+" : ""}
-                    {t.type === "card_sale" ? ref(t.paidCents) : ref(t.amountCents)}
+                    {t.type === "card_sale" ? ref(t.paidCents) : t.type === "time" ? "" : t.type === "session" && !t.amountCents ? "Sin costo" : ref(t.amountCents)}
                   </span>
                 </li>
               ))}

@@ -57,8 +57,8 @@ npm start            # lo que corre en producción
 
 - El saldo se guarda en centavos de REF y cada cambio queda en `wallet_tx` (recarga, juego, devolución, bono, ajuste)
   con el cajero, la hora y el método de pago. El saldo de un cliente siempre es la suma de sus movimientos.
-- Al activar una estación se cobra el tiempo completo por adelantado. Si la sesión se termina antes, se devuelve
-  el tiempo no usado (se puede apagar en Ajustes).
+- Al activar una estación se cobra el tiempo completo por adelantado. Si la sesión se termina antes, lo que no se usó
+  queda como tiempo a favor (ver más abajo); no se devuelve dinero.
 - Al llegar a cero empiezan los minutos de gracia (5 por defecto) para guardar la partida; luego la PC se bloquea.
 - **Tipos de usuario** (columna `users.role`; los permisos se aplican en `server/trpc.ts`, no solo en pantalla):
 
@@ -70,6 +70,9 @@ npm start            # lo que corre en producción
   | Cocina | `kitchen` | Solo las comandas |
 
   La cuenta de `ADMIN_PHONE` es el súper admin. Al actualizar una instalación anterior, ese administrador pasa a súper admin en el arranque.
+- **Tiempo a favor:** si una sesión se termina antes, no se devuelve dinero: los minutos sin usar quedan guardados
+  (`time_credits`, por tipo de máquina, porque cada tipo tiene su tarifa) y se gastan primero la próxima vez que el
+  cliente juegue en ese tipo de máquina. Se apaga en Ajustes. Un administrador puede corregirlo desde la ficha del cliente.
 - **Comandas:** al cobrar una orden con productos marcados "pasa por cocina" se crea la comanda (`orders.kitchen_status`): por preparar, en preparación, lista, entregada.
 - **Fiestas** (`server/office.ts`): paquetes, cotizaciones `COT-0001` con estados borrador, enviada, aprobada, agendada y realizada, pagos por abonos y recibo `R-0001` cuando queda pagada. El recibo es un control interno, no una factura fiscal.
 - **Compras:** registro de facturas de proveedores con su estado de pago.

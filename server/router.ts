@@ -7,6 +7,7 @@ import { QR_PREFIX, caracasDate, clearRateLimit, fail, newDeviceToken, normalize
 import {
   activeMenu,
   activeSessionsOf,
+  adjustTime,
   closingInfo,
   createOrder,
   createUser,
@@ -24,6 +25,7 @@ import {
   setKitchenStatus,
   startSession,
   stationsBoard,
+  timeCreditsOf,
   userTx,
 } from "./services";
 import { addQuotePayment, createQuote, dayReport, getQuote, listPackages, listPurchases, listQuotes, liveSummary, removeQuotePayment, savePurchase, setQuoteStatus, updateQuote, PURCHASE_CATEGORIES } from "./office";
@@ -57,7 +59,7 @@ const publicUser = (u: UserRow) => ({
 
 async function memberDetail(u: UserRow) {
   const config = await getConfig();
-  const [tx, live, purchases] = await Promise.all([recentTx(u.id), activeSessionsOf(u.id), recentOrders({ userId: u.id }, 8)]);
+  const [tx, live, purchases, timeCredits] = await Promise.all([recentTx(u.id), activeSessionsOf(u.id), recentOrders({ userId: u.id }, 8), timeCreditsOf(u.id)]);
   return {
     ...publicUser(u),
     email: u.email,
@@ -65,6 +67,8 @@ async function memberDetail(u: UserRow) {
     hasPassword: Boolean(u.passwordHash),
     cardQr: `${QR_PREFIX}${u.cardToken}`,
     balanceCents: u.balanceCents,
+    // Minutos a favor por tipo de máquina: tiempo pagado que no usó y puede jugar otro día.
+    timeCredits,
     visitsCount: u.visitsCount,
     level: levelFor(config, u.visitsCount),
     loyalty: { every: config.loyaltyEvery, bonusCents: config.loyaltyBonusCents },
@@ -415,7 +419,7 @@ const configInput = z.object({
   rates: z.object({ pc: cents.min(0), ps5: cents.min(0), switch: cents.min(0), sim: cents.min(0) }),
   cardPriceCents: cents.min(0),
   graceMinutes: z.number().int().min(0).max(30),
-  refundOnEarlyEnd: z.boolean(),
+  saveUnusedTime: z.boolean(),
   loyaltyEvery: z.number().int().min(1).max(100),
   loyaltyBonusCents: cents.min(0),
   levels: z.array(z.object({ name: z.string().trim().min(1).max(30), min: z.number().int().min(0) })).min(1).max(8),
@@ -555,6 +559,18 @@ const adminRouter = router({
         balanceCents: await ledger(tx, { userId: input.userId, type: "adjust", amountCents: input.amountCents, note: input.note, staffId: ctx.user.id }),
       })),
     ),
+
+  // Corrección manual del tiempo a favor: sumar o quitar minutos de un tipo de máquina.
+  adjustTime: adminProcedure
+    .input(
+      z.object({
+        userId: id,
+        kind: z.enum(STATION_KINDS),
+        minutes: z.number().int().min(-1440).max(1440).refine((n) => n !== 0, "Indica cuántos minutos sumar o quitar."),
+        note: z.string().trim().min(4, "Explica el motivo del ajuste.").max(120),
+      }),
+    )
+    .mutation(({ ctx, input }) => adjustTime({ ...input, staffId: ctx.user.id })),
 });
 
 export const appRouter = router({

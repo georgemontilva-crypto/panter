@@ -40,7 +40,18 @@ export const TX_LABEL: Record<string, string> = {
   bonus: "Bono de fidelidad",
   adjust: "Ajuste",
   purchase: "Compra en el menú",
+  time: "Tiempo a favor",
 };
+
+// ---------- Tiempo a favor ----------
+// Minutos pagados que el cliente no usó. Se llevan por tipo de máquina y se gastan primero la próxima vez.
+export type TimeCredit = MemberHome["timeCredits"][number];
+export const creditMinutes = (credits: TimeCredit[], kind: StationKind) => credits.find((c) => c.kind === kind)?.minutes ?? 0;
+/** Cuánto se cobra y cuánto sale del tiempo a favor al pedir "minutes" en una máquina de ese tipo. */
+export function priceOf(ratePerHourCents: number, minutes: number, credit: number) {
+  const fromCredit = Math.min(credit, minutes);
+  return { fromCredit, costCents: Math.round((ratePerHourCents * (minutes - fromCredit)) / 60) };
+}
 export type MenuItem = Out["member"]["menu"][number];
 export type OrderRow = MemberHome["orders"][number];
 

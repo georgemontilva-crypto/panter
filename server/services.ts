@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import { db, type Tx } from "./db";
-import { KITCHEN_STATES, PAY_METHODS, ROLES, STATION_KINDS, TX_TYPES, orderItems, orders, products, sessions, settings, stations, users, visits, walletTx } from "./db/schema";
+import { KITCHEN_STATES, PAY_METHODS, ROLES, STATION_KINDS, TX_TYPES, orderItems, orders, products, sessions, settings, stations, timeCredits, users, visits, walletTx } from "./db/schema";
 import { hours as defaultHours } from "../src/content";
 import { closingAt, closingProblem, sellableMinutes, type WeekHours } from "./closing";
 import { MINUTE, caracasDate, fail, newCardToken, newMemberCode, newPairCode, now } from "./lib";
@@ -50,8 +50,8 @@ export type Config = {
   cardPriceCents: number;
   /** Minutos extra al llegar a cero, para guardar la partida. */
   graceMinutes: number;
-  /** Devolver al saldo el tiempo no usado cuando una sesión se termina antes. */
-  refundOnEarlyEnd: boolean;
+  /** Si una sesión se termina antes, los minutos sin usar quedan a favor del cliente para otro día. Nunca se devuelve dinero. */
+  saveUnusedTime: boolean;
   /** Cada N visitas se acredita un bono. Con bono en 0 queda apagado. */
   loyaltyEvery: number;
   loyaltyBonusCents: number;
@@ -66,7 +66,7 @@ export const DEFAULT_CONFIG: Config = {
   rates: { pc: 0, ps5: 0, switch: 0, sim: 0 },
   cardPriceCents: 0,
   graceMinutes: 5,
-  refundOnEarlyEnd: true,
+  saveUnusedTime: true,
   loyaltyEvery: 10,
   loyaltyBonusCents: 0,
   levels: [
@@ -267,7 +267,9 @@ export async function startSession(input: {
     // No se vende tiempo que pase de la hora de cierre.
     const tooLong = closingProblem(config, t, input.minutes, input.staffId === null ? 30 : 15);
     if (tooLong) fail("BAD_REQUEST", tooLong);
-    const cost = costFor(rate, input.minutes);
+    // Primero se gasta el tiempo a favor de ese tipo de máquina; solo se cobra lo que falte.
+    const fromCredit = Math.min(await creditOf(tx, input.userId, station.kind), input.minutes);
+    const cost = costFor(rate, input.minutes - fromCredit);
     const endsAt = t + input.minutes * MINUTE;
 
     const [created] = await tx.insert(sessions).values({
@@ -278,20 +280,23 @@ export async function startSession(input: {
       graceEndsAt: endsAt + config.graceMinutes * MINUTE,
       minutesPaid: input.minutes,
       costCents: cost,
+      creditMinutes: fromCredit,
       startedBy: input.staffId,
     });
+    // Si el saldo no alcanza, ledger() falla y todo se deshace, incluido el tiempo a favor que se iba a gastar.
     await ledger(tx, {
       userId: input.userId,
       type: "session",
       amountCents: -cost,
       sessionId: created.insertId,
       staffId: input.staffId,
-      note: `${stationLabel(station)}: ${input.minutes} min`,
+      note: `${stationLabel(station)}: ${input.minutes} min${creditNote(fromCredit, input.minutes)}`,
     });
+    if (fromCredit) await moveCredit(tx, input.userId, station.kind, -fromCredit);
     await recordVisit(tx, input.userId, "session", config);
     // El código usado ya no sirve: la próxima activación necesita uno nuevo.
     await tx.update(stations).set({ pairCode: newPairCode(), pairCodeAt: t }).where(eq(stations.id, station.id));
-    return { sessionId: created.insertId, endsAt, costCents: cost };
+    return { sessionId: created.insertId, endsAt, costCents: cost, creditMinutes: fromCredit };
   }));
 }
 
@@ -311,8 +316,10 @@ export async function extendSession(input: { sessionId: number; minutes: number;
       fail("NOT_FOUND", "Esa sesión ya terminó. Activa una nueva.");
     }
     const [station] = await tx.select().from(stations).where(eq(stations.id, session.stationId));
-    const cost = costFor(config.rates[station.kind], input.minutes);
-    if (!cost) fail("BAD_REQUEST", "Esa estación no tiene tarifa configurada.");
+    const rate = config.rates[station.kind];
+    if (!rate) fail("BAD_REQUEST", "Esa estación no tiene tarifa configurada.");
+    const fromCredit = Math.min(await creditOf(tx, session.userId, station.kind), input.minutes);
+    const cost = costFor(rate, input.minutes - fromCredit);
     // El tiempo extra se cuenta desde el final de la sesión: tampoco puede pasar del cierre.
     const tooLong = closingProblem(config, t, input.minutes, input.staffId === null ? 30 : 15, Math.max(t, session.endsAt));
     if (tooLong) fail("BAD_REQUEST", tooLong);
@@ -325,6 +332,7 @@ export async function extendSession(input: { sessionId: number; minutes: number;
         graceEndsAt: endsAt + config.graceMinutes * MINUTE,
         minutesPaid: session.minutesPaid + input.minutes,
         costCents: session.costCents + cost,
+        creditMinutes: session.creditMinutes + fromCredit,
       })
       .where(eq(sessions.id, session.id));
     await ledger(tx, {
@@ -333,9 +341,10 @@ export async function extendSession(input: { sessionId: number; minutes: number;
       amountCents: -cost,
       sessionId: session.id,
       staffId: input.staffId,
-      note: `${stationLabel(station)}: +${input.minutes} min`,
+      note: `${stationLabel(station)}: +${input.minutes} min${creditNote(fromCredit, input.minutes)}`,
     });
-    return { endsAt, costCents: cost };
+    if (fromCredit) await moveCredit(tx, session.userId, station.kind, -fromCredit);
+    return { endsAt, costCents: cost, creditMinutes: fromCredit };
   });
 }
 
@@ -348,23 +357,63 @@ export async function endSession(input: { sessionId: number; staffId: number | n
     if (!session || (input.userId !== undefined && session.userId !== input.userId)) {
       fail("NOT_FOUND", "Esa sesión ya había terminado.");
     }
-    const unusedMinutes = Math.max(0, Math.floor((session.endsAt - t) / MINUTE));
-    const refund = config.refundOnEarlyEnd ? Math.floor((session.costCents * unusedMinutes) / session.minutesPaid) : 0;
-    await tx
-      .update(sessions)
-      .set({ status: "ended", endedAt: t, endReason: input.reason, refundCents: refund })
-      .where(eq(sessions.id, session.id));
-    if (refund > 0) {
+    // Terminar antes no devuelve dinero: los minutos que no se usaron quedan a favor para otro día.
+    // Al minuto más cercano: quien termina a los pocos segundos de empezar conserva su tiempo completo.
+    const unusedMinutes = Math.max(0, Math.round((session.endsAt - t) / MINUTE));
+    const savedMinutes = config.saveUnusedTime ? unusedMinutes : 0;
+    await tx.update(sessions).set({ status: "ended", endedAt: t, endReason: input.reason, savedMinutes }).where(eq(sessions.id, session.id));
+    if (savedMinutes > 0) {
+      const [station] = await tx.select().from(stations).where(eq(stations.id, session.stationId));
+      await moveCredit(tx, session.userId, station.kind, savedMinutes);
       await ledger(tx, {
         userId: session.userId,
-        type: "refund",
-        amountCents: refund,
+        type: "time",
+        amountCents: 0,
         sessionId: session.id,
         staffId: input.staffId,
-        note: `Devolución de ${unusedMinutes} min sin usar`,
+        note: `Te quedaron ${savedMinutes} min de ${KIND_LABEL[station.kind]} a favor`,
       });
     }
-    return { refundCents: refund, unusedMinutes };
+    return { savedMinutes, unusedMinutes };
+  });
+}
+
+// ---------- Tiempo a favor ----------
+const creditNote = (fromCredit: number, minutes: number) => (!fromCredit ? "" : fromCredit === minutes ? ", con tu tiempo a favor" : `, ${fromCredit} de tu tiempo a favor`);
+
+/** Minutos a favor de un cliente en un tipo de máquina. Siempre se llama dentro de userTx, que ya lo tiene en exclusiva. */
+async function creditOf(tx: Tx, userId: number, kind: StationKind): Promise<number> {
+  const [row] = await tx.select({ minutes: timeCredits.minutes }).from(timeCredits).where(and(eq(timeCredits.userId, userId), eq(timeCredits.kind, kind)));
+  return row?.minutes ?? 0;
+}
+
+async function moveCredit(tx: Tx, userId: number, kind: StationKind, delta: number): Promise<number> {
+  const current = await creditOf(tx, userId, kind);
+  const next = current + delta;
+  if (next < 0) fail("BAD_REQUEST", "El cliente no tiene tantos minutos a favor.");
+  const [row] = await tx.select({ id: timeCredits.id }).from(timeCredits).where(and(eq(timeCredits.userId, userId), eq(timeCredits.kind, kind)));
+  if (row) await tx.update(timeCredits).set({ minutes: next, updatedAt: now() }).where(eq(timeCredits.id, row.id));
+  else await tx.insert(timeCredits).values({ userId, kind, minutes: next, updatedAt: now() });
+  return next;
+}
+
+export async function timeCreditsOf(userId: number) {
+  const rows = await db.select({ kind: timeCredits.kind, minutes: timeCredits.minutes }).from(timeCredits).where(and(eq(timeCredits.userId, userId), gt(timeCredits.minutes, 0)));
+  return STATION_KINDS.flatMap((kind) => rows.filter((r) => r.kind === kind));
+}
+
+/** Corrección manual del tiempo a favor (un administrador). Queda en el historial del cliente con el motivo. */
+export function adjustTime(input: { userId: number; kind: StationKind; minutes: number; note: string; staffId: number }) {
+  return userTx(input.userId, async (tx) => {
+    const minutes = await moveCredit(tx, input.userId, input.kind, input.minutes);
+    await ledger(tx, {
+      userId: input.userId,
+      type: "time",
+      amountCents: 0,
+      staffId: input.staffId,
+      note: `Ajuste: ${input.minutes > 0 ? "+" : ""}${input.minutes} min de ${KIND_LABEL[input.kind]}. ${input.note}`.slice(0, 200),
+    });
+    return { minutes };
   });
 }
 

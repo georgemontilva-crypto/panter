@@ -34,7 +34,7 @@ function ConfigForm({ config }: { config: Config }) {
   const [bonus, setBonus] = useState(money(config.loyaltyBonusCents));
   const [grace, setGrace] = useState(config.graceMinutes);
   const [every, setEvery] = useState(config.loyaltyEvery);
-  const [refund, setRefund] = useState(config.refundOnEarlyEnd);
+  const [saveTime, setSaveTime] = useState(config.saveUnusedTime);
   const [levels, setLevels] = useState(config.levels);
   const [hours, setHours] = useState(config.hours);
   const [extended, setExtended] = useState(toLocalInput(config.extendedUntil && config.extendedUntil > Date.now() ? config.extendedUntil : null));
@@ -62,7 +62,7 @@ function ConfigForm({ config }: { config: Config }) {
       loyaltyBonusCents: bonusCents,
       graceMinutes: grace,
       loyaltyEvery: every,
-      refundOnEarlyEnd: refund,
+      saveUnusedTime: saveTime,
       levels,
     });
   };
@@ -92,8 +92,8 @@ function ConfigForm({ config }: { config: Config }) {
           </Field>
         </div>
         <label className="check">
-          <input type="checkbox" checked={refund} onChange={(e) => setRefund(e.target.checked)} />
-          Devolver al saldo el tiempo no usado cuando una sesión se termina antes
+          <input type="checkbox" checked={saveTime} onChange={(e) => setSaveTime(e.target.checked)} />
+          Si un cliente termina antes, guardarle los minutos que no usó para otro día (nunca se devuelve dinero)
         </label>
         <fieldset className="schedule">
           <legend>Horario de la arena (hora de Maracaibo)</legend>

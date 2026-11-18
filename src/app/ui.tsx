@@ -39,6 +39,13 @@ export const toLocalInput = (ms: number | null) => (ms ? new Date(ms - CARACAS_M
 export const fromLocalInput = (value: string) => (value ? Date.parse(`${value}:00Z`) + CARACAS_MS : null);
 export const todayInput = () => new Date(Date.now() - CARACAS_MS).toISOString().slice(0, 10);
 
+/** "1,50 REF", "con tu tiempo a favor" o "15 min a favor + 0,75 REF": lo que cuesta un tiempo de juego. */
+export function priceLabel(price: { fromCredit: number; costCents: number }, whose: "tu" | "su" = "tu"): string {
+  if (!price.fromCredit) return ref(price.costCents);
+  if (!price.costCents) return `con ${whose} tiempo a favor`;
+  return `${duration(price.fromCredit)} a favor + ${ref(price.costCents)}`;
+}
+
 // ---------- Reloj ----------
 export function useNowTick(intervalMs = 1000): number {
   const [now, setNow] = useState(() => Date.now());

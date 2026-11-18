@@ -341,7 +341,8 @@ export async function liveSummary() {
   // Últimas ventas, de lo más nuevo a lo más viejo: recargas, tarjetas, tiempo, menú y pagos de fiestas.
   const sales = [
     ...report.moves
-      .filter((m) => ["topup", "card_sale", "session", "purchase"].includes(m.type))
+      // Una sesión pagada entera con tiempo a favor no es una venta: no entra dinero.
+      .filter((m) => ["topup", "card_sale", "session", "purchase"].includes(m.type) && (m.amountCents !== 0 || m.paidCents !== 0))
       .map((m) => ({ key: `m${m.id}`, at: m.createdAt, type: m.type as string, who: m.member, cents: m.type === "topup" || m.type === "card_sale" ? m.paidCents : -m.amountCents, note: m.note })),
     ...report.partyPayments.map((p) => ({ key: `p${p.id}`, at: p.createdAt, type: "party", who: p.customer, cents: p.amountCents, note: p.code })),
   ]

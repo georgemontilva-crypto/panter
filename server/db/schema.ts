@@ -6,7 +6,8 @@ const ms = (name: string) => bigint(name, { mode: "number" });
 
 export const STATION_KINDS = ["pc", "ps5", "switch", "sim"] as const;
 export const PAY_METHODS = ["efectivo_usd", "efectivo_bs", "pago_movil", "punto", "zelle", "otro"] as const;
-export const TX_TYPES = ["topup", "card_sale", "session", "refund", "bonus", "adjust", "purchase"] as const;
+// "time" no mueve dinero: deja constancia en el historial del tiempo a favor que se guardó o se corrigió.
+export const TX_TYPES = ["topup", "card_sale", "session", "refund", "bonus", "adjust", "purchase", "time"] as const;
 // Tipos de usuario. "member" es el cliente; los demás son personal:
 // cashier = operadora (máquinas y caja), kitchen = cocina (solo comandas),
 // admin = administrador (todo), owner = súper admin, el dueño (todo, y además maneja a los administradores).
@@ -89,10 +90,28 @@ export const sessions = mysqlTable(
     minutesPaid: int("minutes_paid").notNull(),
     costCents: int("cost_cents").notNull(),
     refundCents: int("refund_cents").notNull().default(0),
+    // De los minutos de la sesión, cuántos se cubrieron con tiempo a favor (no se cobraron).
+    creditMinutes: int("credit_minutes").notNull().default(0),
+    // Minutos sin usar que se le guardaron al cliente al terminar antes.
+    savedMinutes: int("saved_minutes").notNull().default(0),
     startedBy: int("started_by"),
     endReason: varchar("end_reason", { length: 30 }),
   },
   (t) => [index("sessions_station").on(t.stationId, t.status), index("sessions_user").on(t.userId, t.status)],
+);
+
+// Tiempo a favor: minutos pagados que el cliente no usó y puede jugar otro día.
+// Se lleva por tipo de máquina, porque cada tipo tiene su tarifa: media hora de simulador no vale lo mismo que media hora de PC.
+export const timeCredits = mysqlTable(
+  "time_credits",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("user_id").notNull(),
+    kind: mysqlEnum("kind", STATION_KINDS).notNull(),
+    minutes: int("minutes").notNull().default(0),
+    updatedAt: ms("updated_at").notNull(),
+  },
+  (t) => [uniqueIndex("time_credits_user_kind").on(t.userId, t.kind)],
 );
 
 export const visits = mysqlTable(

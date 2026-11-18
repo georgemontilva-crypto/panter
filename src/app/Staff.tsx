@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { KIND_NAMES, METHODS, ORDER_PROGRESS, ROLE_LABEL, TX_LABEL, canUseDesk, isSenior, methodLabel, trpc, type BoardStation, type MethodId, type OrderRow, type Role, type StationKind } from "./api";
+import { KIND_NAMES, METHODS, ORDER_PROGRESS, ROLE_LABEL, TX_LABEL, canUseDesk, creditMinutes, isSenior, methodLabel, priceOf, trpc, type BoardStation, type MethodId, type OrderRow, type Role, type StationKind } from "./api";
 import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, clock, countdown, duration, parseMoney, ref, useNowTick, when } from "./ui";
 
 const Admin = lazy(() => import("./Admin"));
@@ -178,6 +178,7 @@ function MemberDetail({ id }: { id: number }) {
   const checkin = trpc.staff.checkin.useMutation(refresh);
   const start = trpc.staff.start.useMutation(refresh);
   const end = trpc.staff.end.useMutation(refresh);
+  const me = trpc.auth.me.useQuery(undefined, { retry: false });
 
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState<MethodId>("efectivo_usd");
@@ -195,7 +196,9 @@ function MemberDetail({ id }: { id: number }) {
   const playMinutes = durations.includes(minutes) ? minutes : (durations[durations.length - 1] ?? 0);
   const free = board.data?.filter((s) => s.enabled && !s.session) ?? [];
   const station = free.find((s) => s.id === stationId);
-  const cost = station ? Math.round((m.rates[station.kind] * playMinutes) / 60) : 0;
+  // El tiempo a favor del cliente en ese tipo de máquina se gasta primero; solo se cobra lo que falte.
+  const price = station ? priceOf(m.rates[station.kind], playMinutes, creditMinutes(m.timeCredits, station.kind)) : { fromCredit: 0, costCents: 0 };
+  const cost = price.costCents;
 
   const submitTopup = (e: FormEvent) => {
     e.preventDefault();
@@ -226,6 +229,12 @@ function MemberDetail({ id }: { id: number }) {
             <dt>Saldo</dt>
             <dd>{ref(m.balanceCents)}</dd>
           </div>
+          {m.timeCredits.map((c) => (
+            <div key={c.kind}>
+              <dt>A favor en {KIND_NAMES[c.kind]}</dt>
+              <dd>{duration(c.minutes)}</dd>
+            </div>
+          ))}
           <div>
             <dt>Visitas</dt>
             <dd>{m.visitsCount}</dd>
@@ -242,10 +251,12 @@ function MemberDetail({ id }: { id: number }) {
             {now < s.endsAt ? `Quedan ${countdown(s.endsAt - now)}` : `Tiempo extra: ${countdown(s.graceEndsAt - now)}`}
           </p>
           <button className="btn btn--ghost btn--small" type="button" disabled={end.isPending} onClick={() => end.mutate({ sessionId: s.id })}>
-            Terminar y devolver lo no usado
+            {Math.round((s.endsAt - now) / 60_000) > 0 ? `Terminar y guardarle ${duration(Math.round((s.endsAt - now) / 60_000))} a favor` : "Terminar"}
           </button>
         </Panel>
       ))}
+      {end.isSuccess && end.data.savedMinutes > 0 && <Notice kind="ok">Sesión terminada. Se le guardaron {duration(end.data.savedMinutes)} a favor para otro día; no se devolvió dinero.</Notice>}
+      {end.error && <Notice>{end.error.message}</Notice>}
 
       <div className="detail__grid">
         <MenuSale userId={m.id} balanceCents={m.balanceCents} orders={m.orders} />
@@ -314,7 +325,13 @@ function MemberDetail({ id }: { id: number }) {
             ) : (
               durations.length < STAFF_DURATIONS.length && <p className="form__lead">Hoy cerramos a las {clock(m.closing.closesAt)}: solo aparecen los tiempos que terminan antes.</p>
             )}
-            {station && playMinutes > 0 && <p className="form__lead">Se descuentan {ref(cost)}. Le quedan {ref(Math.max(0, m.balanceCents - cost))}.</p>}
+            {station && playMinutes > 0 && (
+              <p className="form__lead">
+                {price.fromCredit === playMinutes
+                  ? `No se cobra nada: usa ${duration(price.fromCredit)} de su tiempo a favor.`
+                  : `${price.fromCredit ? `Usa ${duration(price.fromCredit)} de su tiempo a favor. ` : ""}Se descuentan ${ref(cost)}. Le quedan ${ref(Math.max(0, m.balanceCents - cost))}.`}
+              </p>
+            )}
             <Notice>{start.error?.message}</Notice>
             <button className="btn" type="submit" disabled={start.isPending || !station || !playMinutes}>
               {station && playMinutes ? `Activar ${station.label} por ${duration(playMinutes)}` : "Activar estación"}
@@ -368,15 +385,66 @@ function MemberDetail({ id }: { id: number }) {
                   </span>
                   <span className={`moves__amount${t.amountCents > 0 ? " is-plus" : ""}`}>
                     {t.amountCents > 0 ? "+" : ""}
-                    {t.type === "card_sale" ? ref(t.paidCents) : ref(t.amountCents)}
+                    {t.type === "card_sale" ? ref(t.paidCents) : t.type === "time" ? "" : t.type === "session" && !t.amountCents ? "Sin costo" : ref(t.amountCents)}
                   </span>
                 </li>
               ))}
             </ul>
           )}
         </Panel>
+        {me.data && isSenior(me.data.role) && <TimeAdjust userId={m.id} />}
       </div>
     </div>
+  );
+}
+
+// Corrección del tiempo a favor: solo administradores. Sirve para arreglar una sesión que se abrió o cerró por error.
+function TimeAdjust({ userId }: { userId: number }) {
+  const utils = trpc.useUtils();
+  const [kind, setKind] = useState<StationKind>("pc");
+  const [minutes, setMinutes] = useState("");
+  const [note, setNote] = useState("");
+  const adjust = trpc.admin.adjustTime.useMutation({
+    onSuccess: () => {
+      setMinutes("");
+      setNote("");
+      return utils.staff.invalidate();
+    },
+  });
+  const value = Math.trunc(Number(minutes.replace(",", ".")));
+  return (
+    <Panel title="Corregir tiempo a favor">
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (value) adjust.mutate({ userId, kind, minutes: value, note });
+        }}
+      >
+        <div className="form__pair">
+          <Field label="Tipo de máquina">
+            <select value={kind} onChange={(e) => setKind(e.target.value as StationKind)}>
+              {KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {KIND_NAMES[k]}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Minutos" hint="Para quitar, en negativo: -30.">
+            <input value={minutes} onChange={(e) => setMinutes(e.target.value)} inputMode="text" placeholder="30" required />
+          </Field>
+        </div>
+        <Field label="Motivo">
+          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={120} placeholder="Se le cerró la sesión por error" required />
+        </Field>
+        <Notice>{adjust.error?.message ?? (minutes && !value ? "Escribe los minutos en números, por ejemplo 30 o -30." : null)}</Notice>
+        {adjust.isSuccess && <Notice kind="ok">Listo. Le quedan {duration(adjust.data.minutes)} a favor en ese tipo de máquina.</Notice>}
+        <button className="btn btn--ghost btn--small" type="submit" disabled={adjust.isPending || !value}>
+          Aplicar corrección
+        </button>
+      </form>
+    </Panel>
   );
 }
 
