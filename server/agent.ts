@@ -4,7 +4,7 @@ import { and, eq, gt } from "drizzle-orm";
 import { db } from "./db";
 import { sessions, stations, users } from "./db/schema";
 import { MINUTE, newPairCode, now, sha256 } from "./lib";
-import { finalizeExpired, launcherForAgent, stationLabel } from "./services";
+import { finalizeExpired, isUnlocked, launcherForAgent, stationLabel, unlockForever } from "./services";
 
 // API del programa de bloqueo de cada PC.
 // El programa llama a /api/agent/heartbeat cada pocos segundos con su credencial
@@ -70,9 +70,11 @@ agentRouter.post("/heartbeat", async (req, res) => {
     .where(and(eq(sessions.stationId, station.id), eq(sessions.status, "active"), gt(sessions.graceEndsAt, t)));
 
   let state: "bloqueada" | "activa" | "gracia" | "mantenimiento" | "deshabilitada" = "bloqueada";
-  if (!station.enabled) state = "deshabilitada";
+  // Mantenimiento manda sobre "deshabilitada": una PC fuera de servicio también se abre desde el panel para arreglarla.
+  const unlocked = !session && isUnlocked(station, t);
+  if (unlocked) state = "mantenimiento";
+  else if (!station.enabled) state = "deshabilitada";
   else if (session) state = t < session.endsAt ? "activa" : "gracia";
-  else if (station.unlockUntil && station.unlockUntil > t) state = "mantenimiento";
 
   // Huella de la configuración de la pantalla de juegos: si cambia, el programa vuelve a pedir la lista.
   const launcher = await launcherForAgent();
@@ -86,6 +88,7 @@ agentRouter.post("/heartbeat", async (req, res) => {
     // Solo se muestra con la PC bloqueada: es lo que el cliente escribe en su perfil para activarla.
     pairCode: state === "bloqueada" ? pairCode : null,
     session: session ? { id: session.id, memberName: session.memberName.split(" ")[0], endsAt: session.endsAt, graceEndsAt: session.graceEndsAt } : null,
-    unlockUntil: state === "mantenimiento" ? station.unlockUntil : null,
+    // "Sin límite" viaja sin hora: el programa muestra el aviso de mantenimiento sin cuenta regresiva.
+    unlockUntil: unlocked && !unlockForever(station) ? station.unlockUntil : null,
   });
 });

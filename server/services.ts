@@ -255,6 +255,13 @@ const PAIR_CODE_TTL = 3 * MINUTE;
 
 export const isOnline = (lastSeenAt: number | null) => lastSeenAt !== null && now() - lastSeenAt < AGENT_ONLINE_MS;
 
+// Mantenimiento: el panel le quita el bloqueo a una PC para que el personal la ajuste (instalar juegos, actualizar, revisar).
+// Se guarda en "unlockUntil" la hora a la que se vuelve a bloquear sola; "sin límite" es una fecha que no llega nunca.
+export const UNLOCK_FOREVER = 9_999_999_999_999;
+export const UNLOCK_MAX_MINUTES = 8 * 60;
+export const isUnlocked = (station: { unlockUntil: number | null }, t = now()) => station.unlockUntil !== null && station.unlockUntil > t;
+export const unlockForever = (station: { unlockUntil: number | null }) => station.unlockUntil !== null && station.unlockUntil >= UNLOCK_FOREVER;
+
 /** Cierra en la base las sesiones cuyo tiempo de gracia ya pasó. */
 export async function finalizeExpired() {
   const t = now();
@@ -284,6 +291,7 @@ export async function startSession(input: {
     const t = now();
     const [station] = await tx.select().from(stations).where(eq(stations.id, input.stationId)).for("update");
     if (!station || !station.enabled) fail("BAD_REQUEST", "Esa estación no está disponible.");
+    if (isUnlocked(station, t)) fail("BAD_REQUEST", "Esa PC está sin bloqueo por mantenimiento. Vuelve a bloquearla desde el panel antes de ponerla a jugar.");
 
     if (input.staffId === null) {
       if (station.kind !== "pc") fail("BAD_REQUEST", "Esta estación se activa en caja.");
@@ -625,9 +633,11 @@ export async function stationsBoard() {
     const session = byStation.get(s.id) ?? null;
     const online = s.kind !== "pc" || isOnline(s.lastSeenAt);
     let state: StationState = "libre";
-    if (!s.enabled) state = "deshabilitada";
+    // Una PC fuera de servicio también se puede abrir para arreglarla: mantenimiento manda sobre "deshabilitada".
+    const unlocked = !session && isUnlocked(s, t);
+    if (unlocked) state = "mantenimiento";
+    else if (!s.enabled) state = "deshabilitada";
     else if (session) state = t < session.endsAt ? "ocupada" : "gracia";
-    else if (s.unlockUntil && s.unlockUntil > t) state = "mantenimiento";
     else if (!online) state = "sin_conexion";
     return {
       id: s.id,
@@ -640,9 +650,35 @@ export async function stationsBoard() {
       online,
       hasAgent: s.kind === "pc" && Boolean(s.deviceTokenHash),
       agentVersion: s.agentVersion,
-      unlockUntil: s.unlockUntil,
+      // Con "sin límite" no hay hora de vuelta: unlockUntil va vacío y unlockForever en true.
+      unlockUntil: unlocked && !unlockForever(s) ? s.unlockUntil : null,
+      unlockForever: unlocked && unlockForever(s),
       session,
     };
+  });
+}
+
+/**
+ * Quita o devuelve el bloqueo de una PC desde el panel.
+ * minutes: 0 la vuelve a bloquear, un número la abre ese tiempo y null la deja abierta hasta que alguien la bloquee.
+ */
+export async function unlockStation(stationId: number, minutes: number | null) {
+  await finalizeExpired();
+  return withLock(`s:${stationId}`, async () => {
+    const t = now();
+    const [station] = await db.select().from(stations).where(eq(stations.id, stationId));
+    if (!station) fail("NOT_FOUND", "Esa estación ya no existe.");
+    if (minutes === 0) {
+      await db.update(stations).set({ unlockUntil: null }).where(eq(stations.id, stationId));
+      return { ok: true, unlockUntil: null, online: isOnline(station.lastSeenAt) };
+    }
+    if (station.kind !== "pc") fail("BAD_REQUEST", "Solo las PCs usan el programa de bloqueo.");
+    if (!station.deviceTokenHash) fail("BAD_REQUEST", "Esa PC todavía no tiene el programa de bloqueo instalado.");
+    const [busy] = await db.select({ id: sessions.id }).from(sessions).where(and(eq(sessions.stationId, stationId), liveSession(t)));
+    if (busy) fail("CONFLICT", "Hay un cliente jugando en esa PC. Termina su sesión antes de quitarle el bloqueo.");
+    const unlockUntil = minutes === null ? UNLOCK_FOREVER : t + minutes * MINUTE;
+    await db.update(stations).set({ unlockUntil }).where(eq(stations.id, stationId));
+    return { ok: true, unlockUntil: minutes === null ? null : unlockUntil, online: isOnline(station.lastSeenAt) };
   });
 }
 

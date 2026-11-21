@@ -3,7 +3,7 @@ import { z } from "zod";
 import { checkPassword, endLogin, hashPassword, startLogin } from "./auth";
 import { db } from "./db";
 import { PAY_METHODS, QUOTE_STATES, STATION_KINDS, launcherApps, partyPackages, products, purchases, stations, users } from "./db/schema";
-import { QR_PREFIX, caracasDate, clearRateLimit, fail, newDeviceToken, normalizePhone, now, rateLimit, sha256, MINUTE } from "./lib";
+import { QR_PREFIX, caracasDate, clearRateLimit, fail, newDeviceToken, normalizePhone, now, rateLimit, sha256 } from "./lib";
 import {
   activeMenu,
   activeSessionsOf,
@@ -29,6 +29,8 @@ import {
   startSession,
   stationsBoard,
   timeCreditsOf,
+  unlockStation,
+  UNLOCK_MAX_MINUTES,
   userTx,
 } from "./services";
 import { addQuotePayment, createQuote, dayReport, getQuote, listPackages, listPurchases, listQuotes, liveSummary, removeQuotePayment, savePurchase, setQuoteStatus, updateQuote, PURCHASE_CATEGORIES } from "./office";
@@ -485,10 +487,10 @@ const adminRouter = router({
     return { token };
   }),
 
-  stationUnlock: adminProcedure.input(z.object({ id, minutes: z.number().int().min(0).max(240) })).mutation(async ({ input }) => {
-    await db.update(stations).set({ unlockUntil: input.minutes ? now() + input.minutes * MINUTE : null }).where(eq(stations.id, input.id));
-    return { ok: true };
-  }),
+  // Mantenimiento: 0 vuelve a bloquear, un número abre ese tiempo, null abre hasta que alguien la bloquee.
+  stationUnlock: adminProcedure
+    .input(z.object({ id, minutes: z.number().int().min(0).max(UNLOCK_MAX_MINUTES).nullable() }))
+    .mutation(({ input }) => unlockStation(input.id, input.minutes)),
 
   staffList: adminProcedure.query(async () => {
     const rows = await db.select().from(users).where(ne(users.role, "member")).orderBy(users.name);

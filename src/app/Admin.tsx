@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { KIND_NAMES, ROLE_ABOUT, ROLE_LABEL, trpc, type Config, type Role, type StationKind } from "./api";
 import { Badge, Field, Notice, Panel, STATE_LABEL, money, parseMoney, ref, when } from "./ui";
+import { Maintenance, maintenanceText } from "./Maintenance";
 
 const KINDS: StationKind[] = ["pc", "ps5", "switch", "sim"];
 const DAYS = [
@@ -151,7 +152,6 @@ function StationsAdmin() {
   const refresh = { onSuccess: () => utils.staff.board.invalidate() };
   const create = trpc.admin.stationCreate.useMutation(refresh);
   const update = trpc.admin.stationUpdate.useMutation(refresh);
-  const unlock = trpc.admin.stationUnlock.useMutation(refresh);
   const token = trpc.admin.stationToken.useMutation(refresh);
   const [kind, setKind] = useState<StationKind>("pc");
   const [number, setNumber] = useState(1);
@@ -222,7 +222,10 @@ function StationsAdmin() {
               {board.data.map((s) => (
                 <tr key={s.id}>
                   <td>{s.label}</td>
-                  <td>{STATE_LABEL[s.state]}</td>
+                  <td>
+                    {STATE_LABEL[s.state]}
+                    {s.state === "mantenimiento" && <small className="cell-note">{maintenanceText(s)}</small>}
+                  </td>
                   <td>
                     {s.kind !== "pc"
                       ? "No aplica"
@@ -245,13 +248,11 @@ function StationsAdmin() {
                         >
                           {s.hasAgent ? "Nueva credencial" : "Generar credencial"}
                         </button>
-                        <button type="button" onClick={() => unlock.mutate({ id: s.id, minutes: s.state === "mantenimiento" ? 0 : 30 })}>
-                          {s.state === "mantenimiento" ? "Volver a bloquear" : "Desbloquear 30 min"}
-                        </button>
+                        <Maintenance s={s} />
                       </>
                     )}
                     <button type="button" onClick={() => update.mutate({ id: s.id, enabled: !s.enabled, note: s.note ?? undefined })}>
-                      {s.enabled ? "Deshabilitar" : "Habilitar"}
+                      {s.enabled ? "Sacar de servicio" : "Poner en servicio"}
                     </button>
                   </td>
                 </tr>

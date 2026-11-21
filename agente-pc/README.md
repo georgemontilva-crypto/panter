@@ -91,7 +91,7 @@ Solo cubre el monitor principal. Si una PC tiene dos monitores, en el segundo se
 
 ## Mantenimiento
 
-- **Desbloquear una PC sin cobrar** (instalar juegos, actualizar): Caja → Ajustes → Estaciones → *Desbloquear 30 min*.
+- **Quitar el bloqueo de una PC desde el panel** (instalar juegos, actualizar, ajustarla): Panel → Máquinas (o Ajustes → Estaciones) → *Quitar el bloqueo*, y se elige 30 minutos, 1 hora, 2 horas o *Hasta que yo la bloquee*. La PC queda con Windows normal y con un aviso de mantenimiento; *Volver a bloquear* la cierra de nuevo. Lo hacen el administrador y el dueño, no hace falta ir a la PC ni reinstalar nada.
 - **Cerrar el programa en la PC:** en la pantalla de bloqueo pulsa el botón **Mantenimiento** (abajo a la derecha) o `Ctrl + Mayús + M`, y escribe la clave de mantenimiento.
 - **Ver el escritorio con un cliente jugando:** en la pantalla de juegos, **Mantenimiento** → clave → *Mostrar el escritorio*. Dura hasta que termine esa sesión.
 - **Cambiar la credencial o la dirección:** **Mantenimiento** → *Volver a configurar*.

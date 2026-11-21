@@ -355,6 +355,8 @@ export async function liveSummary() {
       total: usable.length,
       inUse: usable.filter(busy).length,
       offline: usable.filter((s) => s.state === "sin_conexion").length,
+      // PCs a las que se les quitó el bloqueo desde el panel: conviene verlas para que ninguna se quede abierta.
+      maintenance: board.filter((s) => s.state === "mantenimiento").map((s) => s.label),
       byKind: kinds.map((kind) => ({ kind, total: usable.filter((s) => s.kind === kind).length, inUse: usable.filter((s) => s.kind === kind && busy(s)).length })),
       active: usable
         .filter((s) => s.session)

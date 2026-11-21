@@ -813,7 +813,8 @@
 }
 .tile__actions {
   display: flex;
-  gap: 20px;
+  flex-wrap: wrap;
+  gap: 0 20px;
 }
 .tile--libre {
   border-left-color: #46d38a;
@@ -828,6 +829,92 @@
 }
 .tile--mantenimiento {
   border-left-color: var(--violet);
+  background: rgba(154, 77, 255, 0.1);
+}
+.tile--mantenimiento .tile__who {
+  color: var(--bone);
+}
+.cell-note {
+  display: block;
+  color: var(--ash);
+  font-size: 0.8125rem;
+}
+
+/* ---------- Pregunta corta encima de la página (quitar el bloqueo de una PC) ---------- */
+.ask {
+  width: min(430px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--ember-2);
+  color: var(--bone);
+}
+.ask::backdrop {
+  background: rgba(0, 0, 0, 0.74);
+}
+.ask__box {
+  display: grid;
+  gap: 12px;
+  padding: 22px;
+}
+.ask h2 {
+  font-stretch: 62.5%;
+  font-weight: 800;
+  font-size: 1.5rem;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+.ask p {
+  color: var(--ash);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+.ask .ask__warn {
+  color: var(--gold);
+}
+.ask .ask__q {
+  margin-top: 4px;
+  color: var(--bone);
+  font-weight: 600;
+}
+.ask__choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.ask__choices button {
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 1px solid rgba(246, 238, 234, 0.28);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: 1rem;
+}
+.ask__choices button:last-child {
+  grid-column: 1 / -1;
+  border-color: var(--violet);
+}
+.ask__choices button:hover:not(:disabled) {
+  background: var(--bone);
+  border-color: var(--bone);
+  color: var(--black);
+}
+.ask__choices button:disabled {
+  opacity: 0.5;
+}
+.ask__cancel {
+  justify-self: center;
+  min-height: 44px;
+  padding: 0 12px;
+  color: var(--ash);
+  font-size: 0.9375rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ask__cancel:hover {
+  color: var(--bone);
 }
 
 .warn {

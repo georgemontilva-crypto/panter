@@ -31,6 +31,7 @@ export default function Live({ go }: { go: (tab: "estaciones" | "cocina" | "fies
           <span className="kpi__sub">
             {stations.byKind.map((k) => `${KIND_NAMES[k.kind]} ${k.inUse} de ${k.total}`).join(", ")}
             {stations.offline > 0 && `. ${stations.offline} sin conexión`}
+            {stations.maintenance.length > 0 && `. Sin bloqueo: ${stations.maintenance.join(", ")}`}
           </span>
         </button>
         <button type="button" className="kpi" onClick={() => go("cierre")}>

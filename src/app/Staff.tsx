@@ -2,6 +2,7 @@ import { lazy, Suspense, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { KIND_NAMES, METHODS, ORDER_PROGRESS, ROLE_LABEL, TX_LABEL, canUseDesk, creditMinutes, isSenior, methodLabel, priceOf, trpc, type BoardStation, type MethodId, type OrderRow, type Role, type StationKind } from "./api";
 import { Field, MemberCard, Notice, Panel, STATE_LABEL, Shell, clock, countdown, duration, parseMoney, ref, useNowTick, when } from "./ui";
+import { Maintenance, maintenanceText } from "./Maintenance";
 
 const Admin = lazy(() => import("./Admin"));
 const Kitchen = lazy(() => import("./Kitchen"));
@@ -194,7 +195,7 @@ function MemberDetail({ id }: { id: number }) {
   // Solo se ofrecen los tiempos que terminan antes del cierre.
   const durations = STAFF_DURATIONS.filter((d) => d <= m.closing.maxMinutes);
   const playMinutes = durations.includes(minutes) ? minutes : (durations[durations.length - 1] ?? 0);
-  const free = board.data?.filter((s) => s.enabled && !s.session) ?? [];
+  const free = board.data?.filter((s) => s.enabled && !s.session && s.state !== "mantenimiento") ?? [];
   const station = free.find((s) => s.id === stationId);
   // El tiempo a favor del cliente en ese tipo de máquina se gasta primero; solo se cobra lo que falte.
   const price = station ? priceOf(m.rates[station.kind], playMinutes, creditMinutes(m.timeCredits, station.kind)) : { fromCredit: 0, costCents: 0 };
@@ -559,7 +560,7 @@ function Clients() {
 }
 
 // ---------- Estaciones ----------
-function StationTile({ s, now }: { s: BoardStation; now: number }) {
+function StationTile({ s, now, canMaintain }: { s: BoardStation; now: number; canMaintain: boolean }) {
   const utils = trpc.useUtils();
   const refresh = { onSuccess: () => utils.staff.invalidate() };
   const extend = trpc.staff.extend.useMutation(refresh);
@@ -588,13 +589,23 @@ function StationTile({ s, now }: { s: BoardStation; now: number }) {
           <Notice>{extend.error?.message ?? end.error?.message}</Notice>
         </>
       ) : (
-        <p className="tile__who">{s.note ?? (s.kind === "pc" && !s.hasAgent ? "Falta instalar el programa de bloqueo" : "")}</p>
+        <>
+          <p className="tile__who">{maintenanceText(s) || s.note || (s.kind === "pc" && !s.hasAgent ? "Falta instalar el programa de bloqueo" : "")}</p>
+          {canMaintain && s.kind === "pc" && s.hasAgent && (
+            <div className="tile__actions">
+              <Maintenance s={s} />
+            </div>
+          )}
+        </>
       )}
     </li>
   );
 }
 
 function Stations() {
+  const me = trpc.auth.me.useQuery(undefined, { retry: false });
+  // Quitar el bloqueo de una PC es cosa del administrador y del dueño; las operadoras solo ven el aviso.
+  const canMaintain = Boolean(me.data && isSenior(me.data.role));
   const board = trpc.staff.board.useQuery(undefined, { refetchInterval: 4000 });
   const now = useNowTick();
   if (!board.data) return <p className="empty">Cargando estaciones…</p>;
@@ -608,7 +619,7 @@ function Stations() {
           <Panel key={kind} title={KIND_NAMES[kind]}>
             <ul className="tiles">
               {list.map((s) => (
-                <StationTile key={s.id} s={s} now={now} />
+                <StationTile key={s.id} s={s} now={now} canMaintain={canMaintain} />
               ))}
             </ul>
           </Panel>

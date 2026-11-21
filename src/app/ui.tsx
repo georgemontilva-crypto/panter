@@ -180,7 +180,7 @@ export const STATE_LABEL: Record<string, string> = {
   ocupada: "Ocupada",
   gracia: "Tiempo extra",
   sin_conexion: "Sin conexión",
-  deshabilitada: "Deshabilitada",
+  deshabilitada: "Fuera de servicio",
   mantenimiento: "Mantenimiento",
 };
 
